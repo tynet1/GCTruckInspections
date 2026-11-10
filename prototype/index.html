@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Grounds Control Vehicle Inspections</title>
+<style>
+:root{
+  --bg:#f3f4f1; --card:#fff; --ink:#1d2420; --muted:#66706a; --line:#dfe3dc;
+  --brand:#2f6b3a; --brand-2:#e7f0e5; --ok:#2f7d46; --ok-bg:#e3f3e7; --bad:#b4402a; --bad-bg:#fbe6e1;
+  --warn:#9a6a00; --warn-bg:#fdf3d6; --radius:14px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif}
+body{padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left)}
+button,input,textarea,select{font:inherit;color:inherit}
+button{cursor:pointer}
+.wrap{max-width:860px;margin:0 auto;padding:0 14px 120px}
+header.top{position:sticky;top:0;z-index:20;background:var(--brand);color:#fff;padding:calc(env(safe-area-inset-top)*0 + 12px) 14px 12px;display:flex;align-items:center;gap:10px}
+header.top h1{font-size:17px;margin:0;font-weight:650;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+header.top .sub{font-size:12px;opacity:.8;font-weight:400}
+.iconbtn{background:rgba(255,255,255,.15);border:0;color:#fff;border-radius:10px;padding:8px 12px;font-weight:600;min-height:40px}
+h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:22px 4px 8px;font-weight:650}
+.card{background:var(--card);border-radius:var(--radius);border:1px solid var(--line);padding:14px;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
+.truck{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px;text-align:left;display:flex;flex-direction:column;gap:4px;min-height:96px}
+.truck:active{transform:scale(.985)}
+.truck .id{font-size:20px;font-weight:700}
+.truck .info{color:var(--muted);font-size:14px}
+.pill{display:inline-block;font-size:12px;font-weight:650;padding:3px 8px;border-radius:999px;background:var(--brand-2);color:var(--brand)}
+.pill.bad{background:var(--bad-bg);color:var(--bad)} .pill.warn{background:var(--warn-bg);color:var(--warn)} .pill.grey{background:#eceee9;color:var(--muted)}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.search{width:100%;padding:12px 14px;border-radius:12px;border:1px solid var(--line);background:#fff;margin-top:14px}
+.list .item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 2px;border-bottom:1px solid var(--line);background:none;border-left:0;border-right:0;border-top:0;width:100%;text-align:left}
+.list .item:last-child{border-bottom:0}
+.muted{color:var(--muted)} .small{font-size:13px}
+label.f{display:block;font-size:13px;color:var(--muted);font-weight:600;margin:0 0 5px}
+input.t,textarea.t,select.t{width:100%;padding:12px;border:1px solid var(--line);border-radius:11px;background:#fff;font-size:16px}
+textarea.t{min-height:84px;resize:vertical}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:520px){.fields{grid-template-columns:1fr}}
+.seg{display:flex;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:#fff}
+.seg button{flex:1;border:0;background:none;padding:12px;font-weight:600;min-height:46px}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--brand);color:#fff}
+.hdr{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:4px 10px;font-size:14px}
+.hdr b{color:var(--muted);font-weight:600}
+.check{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}
+.check:last-child{border-bottom:0}
+.check .lbl{flex:1;font-size:15px}
+.check .btns{display:flex;gap:6px}
+.okb,.rpb{border:1.5px solid var(--line);background:#fff;border-radius:10px;padding:9px 0;width:78px;font-weight:650;font-size:14px;min-height:44px}
+.okb.on{background:var(--ok);border-color:var(--ok);color:#fff}
+.rpb.on{background:var(--bad);border-color:var(--bad);color:#fff}
+.check.missing .lbl{color:var(--bad)}
+.repairnote{width:100%;margin:-2px 0 8px;padding:10px;border:1px solid #efc6bd;background:var(--bad-bg);border-radius:10px;font-size:15px}
+.sechead{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.sechead h3{margin:0;font-size:16px}
+.link{background:none;border:0;color:var(--brand);font-weight:650;padding:6px 0}
+.diagram{position:relative;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:#fafafa;touch-action:manipulation;user-select:none;-webkit-user-select:none}
+.diagram img{display:block;width:100%;pointer-events:none}
+.pin{position:absolute;transform:translate(-50%,-50%);width:28px;height:28px;border-radius:50%;background:var(--bad);color:#fff;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.pin.old{background:#8c948e;width:18px;height:18px;font-size:0;opacity:.85}
+.pinlist .p{display:flex;gap:8px;align-items:center;margin-top:8px}
+.pinlist .num{flex:0 0 26px;height:26px;border-radius:50%;background:var(--bad);color:#fff;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center}
+.x{border:0;background:#eceee9;border-radius:9px;min-width:40px;min-height:40px;font-size:18px;color:var(--muted)}
+.photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.ph{position:relative;border-radius:11px;overflow:hidden;background:#e9ebe6;aspect-ratio:1/1}
+.ph img{width:100%;height:100%;object-fit:cover;display:block}
+.ph .x{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.55);color:#fff;min-width:32px;min-height:32px}
+.ph .cap{position:absolute;left:0;right:0;bottom:0;border:0;background:rgba(0,0,0,.55);color:#fff;font-size:13px;padding:7px 8px}
+.ph .cap::placeholder{color:#ddd}
+.ph.loading::after{content:"Uploading…";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.6);font-size:13px;font-weight:600}
+.addph{border:2px dashed #b9c2b5;border-radius:11px;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;aspect-ratio:1/1;color:var(--brand);font-weight:650;gap:4px;position:relative}
+.addph input{position:absolute;inset:0;opacity:0;width:100%;height:100%}
+.sig{width:100%;height:170px;border:1px solid var(--line);border-radius:11px;background:#fff;touch-action:none;display:block}
+.toggle{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.sw{position:relative;width:54px;height:32px;border-radius:999px;background:#cfd5cc;border:0;flex:0 0 auto}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.3)}
+.sw.on{background:var(--brand)} .sw.on::after{left:25px}
+.bar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-top:1px solid var(--line);padding:10px 14px calc(10px + env(safe-area-inset-bottom))}
+.bar .in{max-width:860px;margin:0 auto;display:flex;gap:12px;align-items:center}
+.prog{flex:1;font-size:13px;color:var(--muted)}
+.prog .track{height:6px;background:#e4e8e1;border-radius:9px;margin-top:5px;overflow:hidden}
+.prog .fill{height:100%;background:var(--brand);width:0}
+.primary{background:var(--brand);color:#fff;border:0;border-radius:12px;padding:13px 22px;font-weight:700;min-height:48px}
+.primary:disabled{opacity:.5}
+.secondary{background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:12px 18px;font-weight:650;min-height:46px}
+.danger{color:var(--bad)}
+.banner{padding:12px 14px;border-radius:12px;margin:12px 0;font-size:14px}
+.banner.err{background:var(--bad-bg);color:var(--bad)} .banner.info{background:var(--warn-bg);color:var(--warn)} .banner.okk{background:var(--ok-bg);color:var(--ok)}
+.toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#1d2420;color:#fff;padding:11px 16px;border-radius:12px;font-size:14px;z-index:60;max-width:90vw;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.show{opacity:1}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:70;display:flex;align-items:flex-end;justify-content:center}
+.modal .sheet{background:#fff;width:100%;max-width:560px;border-radius:18px 18px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));max-height:92vh;overflow:auto}
+@media (min-width:700px){.modal{align-items:center}.modal .sheet{border-radius:18px}}
+.kv{display:grid;grid-template-columns:140px 1fr;gap:6px 12px;font-size:15px}
+.kv dt{color:var(--muted)} .kv dd{margin:0}
+.repairlist li{margin:4px 0}
+.empty{text-align:center;padding:28px 10px;color:var(--muted)}
+.lightbox{position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:80;display:flex;align-items:center;justify-content:center;padding:20px}
+.lightbox img{max-width:100%;max-height:100%;border-radius:8px}
+</style>
+</head>
+<body>
+<header class="top">
+  <button class="iconbtn" id="backBtn" style="display:none" aria-label="Back">‹ Back</button>
+  <h1 id="title">Vehicle Inspections<div class="sub">Grounds Control fleet</div></h1>
+  <button class="iconbtn" id="addTruckBtn" style="display:none">+ Truck</button>
+</header>
+<div class="wrap" id="app"><div class="empty">Loading…</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// ---------- Checklist content (from the paper Truck Inspection Sheet) ----------
+const EXTERIOR = ["Engine oil within acceptable limits","Coolant level acceptable","Windshield washer fluid","No fluids leaking","Hoses visually intact / operational","Tire tread and sidewalls no damage","Tires properly inflated","Headlights function hi and low beam","Tail lights working","Turn signals working","Brake lights working","Reverse / backup lights working","Emergency flashers working","Fuel cap on / lid operational","License plate & reg tag present","Trailer hitch / connections present"];
+const INTERIOR = ["Windshield clean / damage free","Windshield wipers operating / fluid","Windows clean & operational","Mirrors clean & operational","Instrument panel gauges good","Battery charging","Steering wheel / excessive play","Brakes function correctly","Parking brake working","Radio working","Horn sounds","Seat belt functions correctly","Cab clean and free of debris","Fuel / equipment cards","Registration / insurance","Fire extinguishers / first aid kits"];
+const TRAILER = ["Ball mount / receiver pin intact","Hitch coupler is secured","Spring bar hinges / safety clips present","Safety chains properly attached","Electrical wiring & plugs no damage","Reflectors and signs good condition","Brake, signal and plate lights working","Tire tread and sidewalls no damage","Tires properly inflated","Trailer in overall good condition","Trailer license plate & tags present","Load is secured and weight even","Check visibility in vehicle mirrors","Clean drinking water & cups","Wash station present & stocked","Crew has PPE – good condition","Phone in working order"];
+const SECTIONS = [
+  {key:"ext", title:"Exterior", items:EXTERIOR},
+  {key:"int", title:"Interior", items:INTERIOR},
+];
+const TRAILER_SECTION = {key:"trl", title:"Trailer & crew", items:TRAILER};
+const DEFAULT_DIAGRAM = "diagrams/az018-truck.jpg";
+const TRAILER_DIAGRAM = "diagrams/trailer.jpg";
+
+// ---------- State ----------
+let db=null, user=null, assets=null, me=null, myId=null, canAdmin=false, canWrite=true;
+let trucks=[], inspections=[], truckLoaded=false, inspLoaded=false, loadErr=null;
+let view={name:"home"}; let form=null; let q="";
+const $=s=>document.querySelector(s);
+const app=$("#app");
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const today=()=>{const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")};
+const fmtDate=s=>{if(!s)return"";const [y,m,d]=s.split("-");return `${+m}/${+d}/${y}`};
+const blobUrl=id=>"/_blob/"+id;
+function dataUrlToBlob(u){const [h,b]=u.split(",");const bin=atob(b);const a=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i);return new Blob([a],{type:(h.match(/data:([^;]+)/)||[])[1]||"image/png"})}
+const imgSrc=p=>!p?DEFAULT_DIAGRAM:(p.startsWith("diagrams/")?p:blobUrl(p));
+function toast(msg,ms=2600){const t=$("#toast");t.textContent=msg;t.classList.add("show");clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove("show"),ms)}
+function store(k,v){try{v==null?localStorage.removeItem(k):localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
+function load(k){try{const v=localStorage.getItem(k);return v?JSON.parse(v):null}catch(e){return null}}
+
+// ---------- Boot ----------
+(async function boot(){
+  render();
+  try{ [db,user,assets]=await Promise.all([claude.use("db"),claude.use("user"),claude.use("assets")]); }catch(e){}
+  if(!db){loadErr="Sign in to claude.ai to load and save inspections.";render();return}
+  if(user){
+    try{canAdmin=!!user.canEdit()}catch(e){}
+    try{const w=user.can("data.write"); if(w===false) canWrite=false}catch(e){}
+    try{myId=await user.id(); me=await user.me()}catch(e){}
+  }
+  const timer=setTimeout(()=>{if(!truckLoaded){loadErr="Can't reach the inspection database yet. Check your connection.";render()}},10000);
+  db.collection("trucks").onSnapshot(s=>{
+    trucks=s.docs.map(d=>({id:d.id,...d.data()})).filter(t=>!t.retired).sort((a,b)=>a.id.localeCompare(b.id,undefined,{numeric:true}));
+    if(!s.metadata.fromCache){truckLoaded=true;clearTimeout(timer);if(loadErr&&loadErr.startsWith("Can't"))loadErr=null}
+    truckLoaded=true; if(view.name!=="form")render(); else renderHeader();
+  },e=>{clearTimeout(timer);loadErr="Couldn't load trucks ("+e.code+").";render()});
+  db.collection("inspections").orderBy("createdAt","desc").limit(500).onSnapshot(s=>{
+    inspections=s.docs.map(d=>({id:d.id,...d.data()})); inspLoaded=true;
+    if(view.name==="form")return;
+    if(view.name==="detail"&&document.getElementById("supsig")){const cur=inspections.find(x=>x.id===view.id);if(cur&&!cur.supSig)return}
+    render();
+  },e=>{loadErr="Couldn't load inspections ("+e.code+").";render()});
+})();
+
+window.addEventListener("hashchange",()=>{});
+$("#backBtn").onclick=()=>goBack();
+$("#addTruckBtn").onclick=()=>openTruckEditor(null);
+
+function go(v){view=v;window.scrollTo(0,0);render()}
+function goBack(){
+  if(view.name==="form"){ saveDraft(); go(view.from||{name:"truck",id:form.truckId}); return }
+  if(view.name==="detail"){ go(view.from||{name:"home"}); return }
+  go({name:"home"});
+}
+
+// ---------- Helpers ----------
+const lastFor=id=>inspections.find(i=>i.truckId===id);
+function repairsOf(i){const out=[];for(const sec of [...SECTIONS,TRAILER_SECTION]){const r=(i.items||{})[sec.key]||{};sec.items.forEach((lbl,ix)=>{const v=r[ix];if(v&&v.s==="repair")out.push({sec:sec.title,lbl,note:v.n||""})})}return out}
+function daysAgo(dstr){if(!dstr)return null;const d=new Date(dstr+"T12:00:00");return Math.round((Date.now()-d)/864e5)}
+function expired(exp){if(!exp)return false;const d=new Date(exp);return !isNaN(d)&&d<new Date()}
+
+function renderHeader(){
+  const t=$("#title"), b=$("#backBtn"), a=$("#addTruckBtn");
+  a.style.display=(view.name==="home"&&canAdmin)?"":"none";
+  b.style.display=view.name==="home"?"none":"";
+  if(view.name==="home") t.innerHTML='Vehicle Inspections<div class="sub">Grounds Control fleet</div>';
+  else if(view.name==="truck") t.innerHTML=esc(view.id)+'<div class="sub">'+esc((trucks.find(x=>x.id===view.id)||{}).info||"")+'</div>';
+  else if(view.name==="form") t.innerHTML='New inspection<div class="sub">'+esc(form?.truckId||"")+'</div>';
+  else if(view.name==="detail") t.innerHTML='Inspection<div class="sub">'+esc(view.truckId||"")+'</div>';
+}
+
+function render(){
+  renderHeader(); app.onclick=null; app.oninput=null;
+  if(view.name==="home") return renderHome();
+  if(view.name==="truck") return renderTruck();
+  if(view.name==="form") return renderForm();
+  if(view.name==="detail") return renderDetail();
+}
+
+// ---------- Home ----------
+function renderHome(){
+  let h="";
+  if(loadErr) h+=`<div class="banner err">${esc(loadErr)}</div>`;
+  if(!canWrite) h+=`<div class="banner info">You have view-only access. Ask Tyler to make you a Contributor to submit inspections.</div>`;
+  h+=`<input class="search" id="q" placeholder="Search truck, plate, VIN…" value="${esc(q)}" autocomplete="off">`;
+  h+=`<h2>Pick a truck</h2>`;
+  const list=trucks.filter(t=>!q||[t.id,t.info,t.plate,t.vin,t.unit].join(" ").toLowerCase().includes(q.toLowerCase()));
+  if(!truckLoaded) h+=`<div class="empty">Loading trucks…</div>`;
+  else if(!trucks.length) h+=`<div class="card empty">No trucks yet.${canAdmin?' Tap <b>+ Truck</b> to add one.':''}</div>`;
+  else if(!list.length) h+=`<div class="empty">No trucks match “${esc(q)}”.</div>`;
+  else{
+    h+=`<div class="grid">`+list.map(t=>{
+      const l=lastFor(t.id); const n=l?repairsOf(l).length:0; const d=l?daysAgo(l.date):null;
+      const draft=load("gc-draft-"+t.id);
+      return `<button class="truck" data-truck="${esc(t.id)}"><span class="id">${esc(t.id)}</span><span class="info">${esc(t.info||"")}</span>
+        <span class="row" style="margin-top:4px">${l?`<span class="pill ${d>35?"warn":"grey"}">Last: ${fmtDate(l.date)}</span>`:`<span class="pill warn">Never inspected</span>`}
+        ${n?`<span class="pill bad">${n} repair${n>1?"s":""}</span>`:""}${draft?`<span class="pill">Draft</span>`:""}${expired(t.exp)?`<span class="pill bad">Reg expired</span>`:""}</span></button>`}).join("")+`</div>`;
+  }
+  h+=`<h2>Recent inspections</h2><div class="card list">`;
+  h+= inspections.length? inspections.slice(0,15).map(rowHtml).join("") : `<div class="empty">${inspLoaded?"None submitted yet.":"Loading…"}</div>`;
+  h+=`</div>`;
+  app.innerHTML=h;
+  const qi=$("#q"); qi.oninput=e=>{q=e.target.value;const pos=qi.selectionStart;renderHome();const n=$("#q");n.focus();n.setSelectionRange(pos,pos)};
+  app.querySelectorAll("[data-truck]").forEach(b=>b.onclick=()=>go({name:"truck",id:b.dataset.truck}));
+  bindRows({name:"home"});
+}
+function rowHtml(i){const n=repairsOf(i).length;return `<button class="item" data-insp="${esc(i.id)}"><span><b>${esc(i.truckId)}</b> · ${fmtDate(i.date)}<br><span class="small muted">${esc(i.inspector||"")}${i.mileage?` · ${Number(i.mileage).toLocaleString()} mi`:""}</span></span><span class="row">${n?`<span class="pill bad">${n} repair</span>`:`<span class="pill">All OK</span>`}${i.supSig?``:`<span class="pill grey">Unreviewed</span>`}</span></button>`}
+function bindRows(from){app.querySelectorAll("[data-insp]").forEach(b=>b.onclick=()=>{const i=inspections.find(x=>x.id===b.dataset.insp);go({name:"detail",id:b.dataset.insp,truckId:i?.truckId,from})})}
+
+// ---------- Truck page ----------
+function renderTruck(){
+  const t=trucks.find(x=>x.id===view.id);
+  if(!t){app.innerHTML=`<div class="empty">Truck not found.</div>`;return}
+  const hist=inspections.filter(i=>i.truckId===t.id); const l=hist[0];
+  const draft=load("gc-draft-"+t.id);
+  let h=`<div class="card" style="margin-top:14px"><div class="hdr"><b>Truck ID</b><span>${esc(t.id)}</span><b>Unit</b><span>${esc(t.unit||"—")}</span>
+    <b>VIN</b><span style="word-break:break-all">${esc(t.vin||"—")}</span><b>Plate</b><span>${esc(t.plate||"—")}</span>
+    <b>Info</b><span>${esc(t.info||"—")}</span><b>Reg exp.</b><span>${esc(t.exp||"—")} ${expired(t.exp)?'<span class="pill bad">Expired</span>':""}</span></div>
+    ${canAdmin?`<button class="link" id="editT">Edit truck</button>`:""}</div>`;
+  if(canWrite) h+=`<button class="primary" style="width:100%;margin:6px 0 4px" id="start">${draft?"Resume draft inspection":"Start inspection"}</button>`;
+  if(draft&&canWrite) h+=`<button class="link danger" id="discard" style="width:100%">Discard draft</button>`;
+  if(l){const r=repairsOf(l);h+=`<h2>Open from last inspection (${fmtDate(l.date)})</h2><div class="card">${r.length?`<ul class="repairlist" style="margin:0;padding-left:18px">${r.map(x=>`<li><b>${esc(x.lbl)}</b>${x.note?` — ${esc(x.note)}`:""}</li>`).join("")}</ul>`:'<span class="muted">No repair items.</span>'}
+    ${(l.damage||[]).length?`<div class="small muted" style="margin-top:8px">${l.damage.length} damage mark${l.damage.length>1?"s":""} on diagram</div>`:""}</div>`}
+  h+=`<h2>History</h2><div class="card list">${hist.length?hist.map(rowHtml).join(""):'<div class="empty">No inspections yet.</div>'}</div>`;
+  app.innerHTML=h;
+  $("#start")&&($("#start").onclick=()=>startForm(t));
+  $("#discard")&&($("#discard").onclick=()=>confirmBox("Discard the saved draft for "+t.id+"?","Discard",()=>{store("gc-draft-"+t.id,null);renderTruck()}));
+  $("#editT")&&($("#editT").onclick=()=>openTruckEditor(t));
+  bindRows({name:"truck",id:t.id});
+}
+
+// ---------- Form ----------
+function startForm(t){
+  const draft=load("gc-draft-"+t.id);
+  const last=lastFor(t.id);
+  if(draft){form=draft}else{
+    const prevNotes=last?[last.existingNotes,last.newObs].filter(Boolean).join("\n").trim():"";
+    form={truckId:t.id,date:today(),inspector:(me&&me.name)||load("gc-inspector")||"",oil:null,mileage:"",
+      existingNotes:prevNotes,newObs:"",items:{ext:{},int:{},trl:{}},trailerOn:!!t.trailer,trailerNo:"",trailerPlate:"",
+      damage:[],tdamage:[],photos:[],comments:"",sig:null};
+  }
+  form.prevDamage=last?(last.damage||[]):[];
+  form.prevTDamage=last?(last.tdamage||[]):[];
+  go({name:"form",from:{name:"truck",id:t.id}});
+}
+let draftT=null;
+function saveDraft(){if(!form)return;clearTimeout(draftT);const f={...form};delete f.prevDamage;delete f.prevTDamage;f.photos=f.photos.filter(p=>p.id);store("gc-draft-"+form.truckId,f)}
+function touch(){clearTimeout(draftT);draftT=setTimeout(saveDraft,600);updateProgress()}
+
+function checklistHtml(sec){
+  const vals=form.items[sec.key]||{};
+  return `<div class="card" id="sec-${sec.key}"><div class="sechead"><h3>${sec.title}</h3><button class="link" data-allok="${sec.key}">Mark rest OK</button></div>`+
+  sec.items.map((lbl,ix)=>{const v=vals[ix]||{};return `<div class="check" data-row="${sec.key}-${ix}"><span class="lbl">${esc(lbl)}</span><span class="btns">
+    <button class="okb ${v.s==="ok"?"on":""}" data-set="${sec.key}|${ix}|ok">OK</button><button class="rpb ${v.s==="repair"?"on":""}" data-set="${sec.key}|${ix}|repair">Repair</button></span></div>
+    ${v.s==="repair"?`<input class="repairnote" data-rn="${sec.key}|${ix}" placeholder="What needs repair?" value="${esc(v.n||"")}">`:""}`}).join("")+`</div>`;
+}
+function diagramHtml(kind){
+  const t=trucks.find(x=>x.id===form.truckId)||{};
+  const src=kind==="truck"?imgSrc(t.diagram):TRAILER_DIAGRAM;
+  const pins=kind==="truck"?form.damage:form.tdamage; const old=kind==="truck"?form.prevDamage:form.prevTDamage;
+  return `<div class="diagram" data-dia="${kind}"><img src="${esc(src)}" alt="${kind} diagram">
+    ${(old||[]).map(p=>`<span class="pin old" style="left:${p.x*100}%;top:${p.y*100}%"></span>`).join("")}
+    ${pins.map((p,i)=>`<span class="pin" style="left:${p.x*100}%;top:${p.y*100}%">${i+1}</span>`).join("")}</div>
+    <div class="small muted" style="margin-top:6px">Tap the diagram to mark new damage.${(old||[]).length?' Grey dots = damage already noted last time.':''}</div>
+    <div class="pinlist">${pins.map((p,i)=>`<div class="p"><span class="num">${i+1}</span><input class="t" data-pn="${kind}|${i}" placeholder="Describe damage (e.g. dent, rear quarter)" value="${esc(p.note||"")}"><button class="x" data-px="${kind}|${i}" aria-label="Remove">×</button></div>`).join("")}</div>`;
+}
+function renderForm(){
+  const t=trucks.find(x=>x.id===form.truckId)||{id:form.truckId};
+  let h=`<div class="card" style="margin-top:14px"><div class="hdr"><b>Truck</b><span>${esc(t.id)}</span><b>Plate</b><span>${esc(t.plate||"—")}</span><b>Info</b><span>${esc(t.info||"—")}</span><b>Unit</b><span>${esc(t.unit||"—")}</span></div></div>`;
+  h+=`<h2>Inspection</h2><div class="card"><div class="fields">
+    <div><label class="f">Date</label><input class="t" type="date" id="f-date" value="${esc(form.date)}"></div>
+    <div><label class="f">Name of inspector</label><input class="t" id="f-insp" value="${esc(form.inspector)}" autocomplete="name"></div>
+    <div><label class="f">Current mileage</label><input class="t" id="f-mi" inputmode="numeric" pattern="[0-9]*" value="${esc(form.mileage)}" placeholder="e.g. 48210"></div>
+    <div><label class="f">Oil change due?</label><div class="seg"><button data-oil="yes" class="${form.oil==="yes"?"on":""}">Yes</button><button data-oil="no" class="${form.oil==="no"?"on":""}">No</button></div></div>
+  </div></div>`;
+  h+=`<h2>Damage</h2><div class="card" id="dia-truck">${diagramHtml("truck")}</div>`;
+  h+=`<h2>Notes</h2><div class="card"><label class="f">Existing notes</label><textarea class="t" id="f-ex">${esc(form.existingNotes)}</textarea>
+      <label class="f" style="margin-top:12px">New observations</label><textarea class="t" id="f-new" placeholder="Anything new since last time">${esc(form.newObs)}</textarea></div>`;
+  h+=`<h2>Checklist</h2>`+SECTIONS.map(checklistHtml).join("");
+  h+=`<h2>Trailer</h2><div class="card"><div class="toggle"><div><b>Pulling a trailer?</b><div class="small muted">Adds the trailer & crew checklist</div></div><button class="sw ${form.trailerOn?"on":""}" id="trlSw" aria-label="Trailer"></button></div></div>`;
+  if(form.trailerOn){
+    h+=`<div class="card"><div class="fields"><div><label class="f">Trailer number</label><input class="t" id="f-tn" value="${esc(form.trailerNo)}"></div><div><label class="f">Trailer plate</label><input class="t" id="f-tp" value="${esc(form.trailerPlate)}"></div></div></div>`;
+    h+=`<div class="card" id="dia-trailer">${diagramHtml("trailer")}</div>`+checklistHtml(TRAILER_SECTION);
+  }
+  h+=`<h2>Photos</h2><div class="card"><div class="photos" id="photos">${photosHtml()}</div>${assets?"":`<div class="small muted" style="margin-top:8px">Photo upload isn't available for your account here.</div>`}</div>`;
+  h+=`<h2>Comments</h2><div class="card"><textarea class="t" id="f-com">${esc(form.comments)}</textarea></div>`;
+  h+=`<h2>Employee signature</h2><div class="card"><canvas class="sig" id="sig"></canvas><div class="row" style="justify-content:space-between;margin-top:6px"><span class="small muted">Sign with your finger</span><button class="link" id="sigClr">Clear</button></div></div>`;
+  h+=`<div id="formErr"></div>`;
+  app.innerHTML=h+`<div class="bar"><div class="in"><div class="prog"><span id="progTxt"></span><div class="track"><div class="fill" id="progFill"></div></div></div><button class="primary" id="submit">Save inspection</button></div></div>`;
+  bindForm(); updateProgress();
+}
+function photosHtml(){
+  return form.photos.map((p,i)=>`<div class="ph ${p.id?"":"loading"}"><img src="${esc(p.id?blobUrl(p.id):p.preview)}" alt=""><button class="x" data-phx="${i}">×</button><input class="cap" data-phc="${i}" placeholder="Caption" value="${esc(p.cap||"")}"></div>`).join("")+
+  (assets?`<label class="addph"><span style="font-size:28px">＋</span><span>Add photos</span><input type="file" accept="image/*" multiple id="phIn"></label>`:"");
+}
+function bindForm(){
+  const bindInput=(id,key)=>{const el=$(id);if(el)el.oninput=()=>{form[key]=el.value;touch()}};
+  bindInput("#f-date","date");bindInput("#f-insp","inspector");bindInput("#f-ex","existingNotes");bindInput("#f-new","newObs");bindInput("#f-com","comments");bindInput("#f-tn","trailerNo");bindInput("#f-tp","trailerPlate");
+  const mi=$("#f-mi"); mi.oninput=()=>{mi.value=mi.value.replace(/[^\d]/g,"");form.mileage=mi.value;touch()};
+  app.querySelectorAll("[data-oil]").forEach(b=>b.onclick=()=>{form.oil=b.dataset.oil;app.querySelectorAll("[data-oil]").forEach(x=>x.classList.toggle("on",x===b));touch()});
+  app.onclick=e=>{
+    const s=e.target.closest("[data-set]");
+    if(s){const [k,ix,val]=s.dataset.set.split("|");const cur=form.items[k][ix]||{};form.items[k][ix]=cur.s===val?{}:{...cur,s:val};rerenderSection(k);touch();return}
+    const a=e.target.closest("[data-allok]");
+    if(a){const k=a.dataset.allok;const sec=[...SECTIONS,TRAILER_SECTION].find(x=>x.key===k);sec.items.forEach((_,ix)=>{if(!(form.items[k][ix]||{}).s)form.items[k][ix]={s:"ok"}});rerenderSection(k);touch();return}
+    const px=e.target.closest("[data-px]");
+    if(px){const [kind,i]=px.dataset.px.split("|");(kind==="truck"?form.damage:form.tdamage).splice(+i,1);rerenderDiagram(kind);touch();return}
+    const phx=e.target.closest("[data-phx]");
+    if(phx){form.photos.splice(+phx.dataset.phx,1);rerenderPhotos();touch();return}
+  };
+  app.oninput=e=>{
+    const rn=e.target.closest("[data-rn]"); if(rn){const [k,ix]=rn.dataset.rn.split("|");form.items[k][ix].n=rn.value;touch();return}
+    const pn=e.target.closest("[data-pn]"); if(pn){const [kind,i]=pn.dataset.pn.split("|");(kind==="truck"?form.damage:form.tdamage)[+i].note=pn.value;touch();return}
+    const pc=e.target.closest("[data-phc]"); if(pc){form.photos[+pc.dataset.phc].cap=pc.value;touch();return}
+  };
+  bindDiagrams();
+  $("#trlSw").onclick=()=>{form.trailerOn=!form.trailerOn;const y=window.scrollY;renderForm();window.scrollTo(0,y);touch()};
+  bindPhotoInput();
+  setupSig();
+  $("#submit").onclick=submit;
+}
+function bindDiagrams(){
+  app.querySelectorAll("[data-dia]").forEach(d=>d.onclick=e=>{
+    if(e.target.closest(".pin"))return;
+    const r=d.getBoundingClientRect();const kind=d.dataset.dia;
+    const p={x:+((e.clientX-r.left)/r.width).toFixed(4),y:+((e.clientY-r.top)/r.height).toFixed(4),note:""};
+    (kind==="truck"?form.damage:form.tdamage).push(p);rerenderDiagram(kind);touch();
+    const inputs=app.querySelectorAll(`#dia-${kind} [data-pn]`);inputs[inputs.length-1]?.focus({preventScroll:true});
+  });
+}
+function rerenderSection(k){const sec=[...SECTIONS,TRAILER_SECTION].find(x=>x.key===k);const el=$("#sec-"+k);const tmp=document.createElement("div");tmp.innerHTML=checklistHtml(sec);el.replaceWith(tmp.firstElementChild)}
+function rerenderDiagram(kind){$("#dia-"+kind).innerHTML=diagramHtml(kind);bindDiagrams()}
+function rerenderPhotos(){$("#photos").innerHTML=photosHtml();bindPhotoInput()}
+function bindPhotoInput(){const i=$("#phIn");if(i)i.onchange=async()=>{const files=[...i.files];i.value="";for(const f of files)addPhoto(f)}}
+async function addPhoto(file){
+  const p={preview:URL.createObjectURL(file),cap:""};form.photos.push(p);rerenderPhotos();
+  try{
+    const blob=await shrink(file);
+    const r=await assets.upload(blob);
+    p.id=r.id; touch();
+  }catch(e){const ix=form.photos.indexOf(p);if(ix>-1)form.photos.splice(ix,1);toast("Photo upload failed. Try again.")}
+  if(view.name==="form")rerenderPhotos();
+}
+function shrink(file,max=1600){
+  return new Promise((res)=>{
+    const img=new Image();img.onload=()=>{
+      let w=img.naturalWidth,h=img.naturalHeight;const s=Math.min(1,max/Math.max(w,h));w=Math.round(w*s);h=Math.round(h*s);
+      const c=document.createElement("canvas");c.width=w;c.height=h;c.getContext("2d").drawImage(img,0,0,w,h);
+      c.toBlob(b=>res(b||file),"image/jpeg",.8);
+    };img.onerror=()=>res(file);img.src=URL.createObjectURL(file);
+  });
+}
+// signature pad
+function setupSig(id="sig",getter=()=>form.sig,setter=v=>{form.sig=v;touch()}){
+  const c=$("#"+id);const dpr=window.devicePixelRatio||1;
+  const size=()=>{const r=c.getBoundingClientRect();c.width=r.width*dpr;c.height=r.height*dpr;const x=c.getContext("2d");x.scale(dpr,dpr);x.lineWidth=2.4;x.lineCap="round";x.lineJoin="round";x.strokeStyle="#1d2420";
+    const v=getter();if(v){const im=new Image();im.onload=()=>x.drawImage(im,0,0,r.width,r.height);im.src=v}};
+  size();
+  const ctx=c.getContext("2d");let drawing=false,last=null,dirty=false;
+  const pt=e=>{const r=c.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top}};
+  c.onpointerdown=e=>{drawing=true;last=pt(e);c.setPointerCapture(e.pointerId);ctx.beginPath();ctx.arc(last.x,last.y,1.2,0,7);ctx.fill();dirty=true};
+  c.onpointermove=e=>{if(!drawing)return;const p=pt(e);ctx.beginPath();ctx.moveTo(last.x,last.y);ctx.lineTo(p.x,p.y);ctx.stroke();last=p};
+  c.onpointerup=c.onpointercancel=()=>{if(drawing&&dirty)setter(c.toDataURL("image/png"));drawing=false};
+  const clr=$("#"+id+"Clr");if(clr)clr.onclick=()=>{ctx.clearRect(0,0,c.width,c.height);setter(null)};
+}
+function missingList(){
+  const miss=[];const secs=[...SECTIONS,...(form.trailerOn?[TRAILER_SECTION]:[])];
+  let total=0,done=0;
+  for(const s of secs){s.items.forEach((_,ix)=>{total++;if((form.items[s.key][ix]||{}).s)done++})}
+  if(!form.date)miss.push("date"); if(!form.inspector.trim())miss.push("inspector name");
+  if(!form.mileage)miss.push("mileage"); if(!form.oil)miss.push("oil change due");
+  if(done<total)miss.push(`${total-done} checklist item${total-done>1?"s":""}`);
+  if(!form.sig)miss.push("signature");
+  if(form.photos.some(p=>!p.id))miss.push("photos still uploading");
+  return {miss,total,done};
+}
+function updateProgress(){const {total,done}=missingList();const t=$("#progTxt");if(!t)return;t.textContent=`${done} of ${total} checklist items`;$("#progFill").style.width=(total?done/total*100:0)+"%"}
+async function submit(){
+  const {miss}=missingList();
+  const err=$("#formErr");
+  if(miss.length){err.innerHTML=`<div class="banner err">Still needed: ${esc(miss.join(", "))}.</div>`;
+    app.querySelectorAll(".check").forEach(r=>{const [k,ix]=r.dataset.row.split("-");r.classList.toggle("missing",!(form.items[k][ix]||{}).s)});
+    err.scrollIntoView({behavior:"smooth",block:"center"});return}
+  const btn=$("#submit");btn.disabled=true;btn.textContent="Saving…";
+  try{
+    let sigId=null;
+    if(assets){const b=dataUrlToBlob(form.sig);sigId=(await assets.upload(b)).id}
+    const t=trucks.find(x=>x.id===form.truckId)||{};
+    const items={ext:form.items.ext,int:form.items.int,trl:form.trailerOn?form.items.trl:{}};
+    const doc={truckId:form.truckId,truckInfo:t.info||"",date:form.date,inspector:form.inspector.trim(),inspectorId:myId||null,
+      oilDue:form.oil,mileage:Number(form.mileage),existingNotes:form.existingNotes.trim(),newObs:form.newObs.trim(),
+      items,damage:form.damage,trailer:form.trailerOn?{number:form.trailerNo,plate:form.trailerPlate}:null,tdamage:form.trailerOn?form.tdamage:[],
+      photos:form.photos.map(p=>({id:p.id,cap:p.cap||""})),comments:form.comments.trim(),
+      empSig:sigId||null,empSigData:sigId?null:form.sig,repairCount:0,createdAt:Date.now()};
+    doc.repairCount=repairsOf(doc).length;
+    await db.collection("inspections").add(doc);
+    store("gc-inspector",form.inspector.trim());store("gc-draft-"+form.truckId,null);
+    const id=form.truckId;form=null;toast("Inspection saved ✓");go({name:"truck",id});
+  }catch(e){
+    btn.disabled=false;btn.textContent="Save inspection";
+    const m=e&&e.code==="invalid_argument"?"You don't have permission to save inspections. Ask for Contributor access.":e&&e.code==="quota_exceeded"?"The inspection database is full. Tell Tyler.":"Couldn't save. Check your connection and try again. Your draft is kept on this device.";
+    err.innerHTML=`<div class="banner err">${esc(m)}</div>`;saveDraft();
+  }
+}
+
+// ---------- Detail ----------
+function renderDetail(){
+  const i=inspections.find(x=>x.id===view.id);
+  if(!i){app.innerHTML=`<div class="empty">${inspLoaded?"Inspection not found.":"Loading…"}</div>`;return}
+  const t=trucks.find(x=>x.id===i.truckId)||{};
+  const r=repairsOf(i);
+  let h=`<div class="card" style="margin-top:14px"><dl class="kv">
+    <dt>Truck</dt><dd><b>${esc(i.truckId)}</b> ${esc(i.truckInfo||t.info||"")}</dd><dt>Date</dt><dd>${fmtDate(i.date)}</dd>
+    <dt>Inspector</dt><dd>${esc(i.inspector)}</dd><dt>Mileage</dt><dd>${i.mileage?Number(i.mileage).toLocaleString():"—"}</dd>
+    <dt>Oil change due</dt><dd>${i.oilDue==="yes"?'<span class="pill warn">Yes</span>':"No"}</dd>
+    ${i.trailer?`<dt>Trailer</dt><dd>${esc(i.trailer.number||"—")} · plate ${esc(i.trailer.plate||"—")}</dd>`:""}</dl></div>`;
+  h+=`<h2>Repairs needed (${r.length})</h2><div class="card">${r.length?`<ul class="repairlist" style="margin:0;padding-left:18px">${r.map(x=>`<li><b>${esc(x.lbl)}</b> <span class="small muted">(${esc(x.sec)})</span>${x.note?`<br>${esc(x.note)}`:""}</li>`).join("")}</ul>`:'<span class="muted">Everything marked OK.</span>'}</div>`;
+  const dia=(kind,src,pins)=>`<div class="diagram"><img src="${esc(src)}" alt="">${pins.map((p,ix)=>`<span class="pin" style="left:${p.x*100}%;top:${p.y*100}%">${ix+1}</span>`).join("")}</div><ol style="margin:8px 0 0;padding-left:22px">${pins.map(p=>`<li>${esc(p.note||"(no description)")}</li>`).join("")}</ol>`;
+  if((i.damage||[]).length) h+=`<h2>Truck damage</h2><div class="card">${dia("truck",imgSrc(t.diagram),i.damage)}</div>`;
+  if((i.tdamage||[]).length) h+=`<h2>Trailer damage</h2><div class="card">${dia("trailer",TRAILER_DIAGRAM,i.tdamage)}</div>`;
+  if(i.existingNotes||i.newObs) h+=`<h2>Notes</h2><div class="card">${i.existingNotes?`<div class="small muted">Existing</div><div style="white-space:pre-wrap;margin-bottom:10px">${esc(i.existingNotes)}</div>`:""}${i.newObs?`<div class="small muted">New observations</div><div style="white-space:pre-wrap">${esc(i.newObs)}</div>`:""}</div>`;
+  if((i.photos||[]).length) h+=`<h2>Photos</h2><div class="card"><div class="photos">${i.photos.map(p=>`<div class="ph" data-lb="${esc(p.id)}"><img src="${esc(blobUrl(p.id))}" alt="">${p.cap?`<div class="cap">${esc(p.cap)}</div>`:""}</div>`).join("")}</div></div>`;
+  if(i.comments) h+=`<h2>Comments</h2><div class="card" style="white-space:pre-wrap">${esc(i.comments)}</div>`;
+  h+=`<h2>Full checklist</h2><div class="card small">${[...SECTIONS,TRAILER_SECTION].map(s=>{const v=(i.items||{})[s.key]||{};if(!Object.keys(v).length)return"";return `<b>${s.title}</b><div style="margin:4px 0 10px">${s.items.map((l,ix)=>{const x=v[ix]||{};return `<div class="row" style="justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--line)"><span>${esc(l)}</span><span class="pill ${x.s==="repair"?"bad":x.s==="ok"?"":"grey"}">${x.s==="repair"?"Repair":x.s==="ok"?"OK":"—"}</span></div>`}).join("")}</div>`}).join("")}</div>`;
+  const sigImg=(id,data)=>id?`<img src="${esc(blobUrl(id))}" style="max-width:100%;height:90px">`:data?`<img src="${esc(data)}" style="max-width:100%;height:90px">`:"";
+  h+=`<h2>Sign-off</h2><div class="card"><div class="small muted">Employee</div>${sigImg(i.empSig,i.empSigData)}<div class="small">${esc(i.inspector)} · ${fmtDate(i.date)}</div>
+    <div style="border-top:1px solid var(--line);margin:12px 0"></div><div class="small muted">Supervisor</div>`;
+  if(i.supSig) h+=`${sigImg(i.supSig)}<div class="small">${esc(i.supName||"")} · ${fmtDate(i.supDate)}</div>`;
+  else if(canAdmin) h+=`<div style="margin-top:6px"><input class="t" id="supName" placeholder="Supervisor name" value="${esc((me&&me.name)||"")}"><canvas class="sig" id="supsig" style="margin-top:8px"></canvas><div class="row" style="justify-content:space-between;margin-top:8px"><button class="link" id="supsigClr">Clear</button><button class="primary" id="supSave">Sign off</button></div></div>`;
+  else h+=`<span class="pill grey">Awaiting supervisor review</span>`;
+  h+=`</div>`;
+  if(canAdmin) h+=`<button class="link danger" id="delInsp" style="margin-top:6px">Delete this inspection</button>`;
+  app.innerHTML=h;
+  app.onclick=e=>{const lb=e.target.closest("[data-lb]");if(lb){const d=document.createElement("div");d.className="lightbox";d.innerHTML=`<img src="${esc(blobUrl(lb.dataset.lb))}">`;d.onclick=()=>d.remove();document.body.appendChild(d)}};
+  app.oninput=null;
+  if($("#supsig")){let sup=null;setupSig("supsig",()=>sup,v=>{sup=v});
+    $("#supSave").onclick=async()=>{const name=$("#supName").value.trim();if(!sup||!name){toast("Add your name and signature.");return}
+      const b=$("#supSave");b.disabled=true;b.textContent="Saving…";
+      try{const blob=dataUrlToBlob(sup);const a=await assets.upload(blob);await db.doc("inspections/"+i.id).update({supSig:a.id,supName:name,supDate:today(),supId:myId||null});toast("Signed off ✓")}
+      catch(e){b.disabled=false;b.textContent="Sign off";toast("Couldn't save the sign-off.")}}}
+  $("#delInsp")&&($("#delInsp").onclick=()=>confirmBox("Delete this inspection for "+i.truckId+" on "+fmtDate(i.date)+"? This can't be undone.","Delete",async()=>{try{await db.doc("inspections/"+i.id).delete();toast("Deleted");go({name:"truck",id:i.truckId})}catch(e){toast("Couldn't delete.")}}));
+}
+
+// ---------- Modals ----------
+function modal(html){const m=document.createElement("div");m.className="modal";m.innerHTML=`<div class="sheet">${html}</div>`;m.onclick=e=>{if(e.target===m)m.remove()};document.body.appendChild(m);return m}
+function confirmBox(msg,label,fn){const m=modal(`<p style="margin:4px 0 16px">${esc(msg)}</p><div class="row" style="justify-content:flex-end"><button class="secondary" data-c>Cancel</button><button class="primary" style="background:var(--bad)" data-y>${esc(label)}</button></div>`);
+  m.querySelector("[data-c]").onclick=()=>m.remove();m.querySelector("[data-y]").onclick=()=>{m.remove();fn()}}
+function openTruckEditor(t){
+  const isNew=!t;t=t||{id:"",unit:"",vin:"",plate:"",info:"",exp:"",trailer:false,diagram:""};
+  let diagram=t.diagram||"";
+  const m=modal(`<h3 style="margin:0 0 14px">${isNew?"Add truck":"Edit "+esc(t.id)}</h3>
+   <div class="fields"><div><label class="f">Truck ID</label><input class="t" id="tId" value="${esc(t.id)}" ${isNew?"":"disabled"} placeholder="AZ018" autocapitalize="characters"></div>
+   <div><label class="f">Unit</label><input class="t" id="tUnit" value="${esc(t.unit)}"></div>
+   <div><label class="f">VIN</label><input class="t" id="tVin" value="${esc(t.vin)}" autocapitalize="characters"></div>
+   <div><label class="f">Plate</label><input class="t" id="tPlate" value="${esc(t.plate)}" autocapitalize="characters"></div>
+   <div><label class="f">Year / make / model</label><input class="t" id="tInfo" value="${esc(t.info)}" placeholder="2025 Ram 2500"></div>
+   <div><label class="f">Registration expiration</label><input class="t" id="tExp" value="${esc(t.exp)}" placeholder="3/15/2026"></div></div>
+   <div class="toggle" style="margin:14px 0"><div><b>Usually pulls a trailer</b><div class="small muted">Turns the trailer checklist on by default</div></div><button class="sw ${t.trailer?"on":""}" id="tTrl"></button></div>
+   <label class="f">Damage diagram</label><div class="diagram" style="margin-bottom:6px"><img id="tDiaImg" src="${esc(imgSrc(diagram))}"></div>
+   ${assets?`<label class="secondary" style="display:inline-block;position:relative">Upload diagram image<input type="file" accept="image/*" id="tDia" style="position:absolute;inset:0;opacity:0"></label>`:""}
+   <div class="small muted" style="margin-top:4px">${diagram?"":"Using the Ram 2500 diagram until you upload one for this model."}</div>
+   <div id="tErr"></div>
+   <div class="row" style="justify-content:space-between;margin-top:18px">${isNew?"<span></span>":`<button class="link danger" id="tRet">Remove truck</button>`}<span class="row"><button class="secondary" id="tCancel">Cancel</button><button class="primary" id="tSave">Save</button></span></div>`);
+  const sw=m.querySelector("#tTrl");sw.onclick=()=>sw.classList.toggle("on");
+  m.querySelector("#tCancel").onclick=()=>m.remove();
+  const di=m.querySelector("#tDia");if(di)di.onchange=async()=>{const f=di.files[0];if(!f)return;try{const r=await assets.upload(await shrink(f,2000));diagram=r.id;m.querySelector("#tDiaImg").src=blobUrl(r.id)}catch(e){toast("Upload failed")}};
+  const ret=m.querySelector("#tRet");if(ret)ret.onclick=async()=>{try{await db.doc("trucks/"+t.id).update({retired:true});m.remove();toast(t.id+" removed");go({name:"home"})}catch(e){toast("Couldn't remove.")}};
+  m.querySelector("#tSave").onclick=async()=>{
+    const id=(m.querySelector("#tId").value||"").trim().toUpperCase().replace(/\s+/g,"");
+    if(!/^[A-Z0-9_\-.]{1,40}$/.test(id)){m.querySelector("#tErr").innerHTML='<div class="banner err">Truck ID can only use letters, numbers, - and _.</div>';return}
+    if(isNew&&trucks.some(x=>x.id===id)){m.querySelector("#tErr").innerHTML='<div class="banner err">That truck already exists.</div>';return}
+    const d={unit:m.querySelector("#tUnit").value.trim(),vin:m.querySelector("#tVin").value.trim().toUpperCase(),plate:m.querySelector("#tPlate").value.trim().toUpperCase(),
+      info:m.querySelector("#tInfo").value.trim(),exp:m.querySelector("#tExp").value.trim(),trailer:sw.classList.contains("on"),diagram:diagram||""};
+    try{await db.doc("trucks/"+id).set(d);m.remove();toast("Saved "+id)}catch(e){m.querySelector("#tErr").innerHTML=`<div class="banner err">Couldn't save (${esc(e.code||"error")}).</div>`}
+  };
+}
+</script>
+</body>
+</html>
