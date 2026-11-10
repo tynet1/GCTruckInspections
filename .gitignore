@@ -23,5 +23,6 @@ backups/
 Thumbs.db
 
 # Local-only files
+.claude/launch.json
 vehicle-inspections-spec.md
 gc-handoff/

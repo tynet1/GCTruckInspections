@@ -1,27 +1,69 @@
-# Grounds Control Vehicle Inspections: handoff package
+# Grounds Control Vehicle Inspections
 
-What's here:
+Phone-first web app that replaces the paper Truck Inspection Sheet: crews sign in with a PIN, fill the same
+checklist on their phone, drop numbered damage pins on the truck diagram, add photos and sign with a finger.
+Supervisors sign off and export a PDF that looks like the paper form. Works with weak or no signal: drafts stay
+on the phone and upload when signal returns.
 
-| Path | What |
+- **Spec:** [SPEC.md](SPEC.md) (source of truth) · **Deploy:** [docs/DEPLOY.md](docs/DEPLOY.md)
+- **Vehicle data questions:** [seed/DATA-ISSUES.md](seed/DATA-ISSUES.md)
+
+## What's in phase 1 (MVP)
+
+| Area | Status |
 |---|---|
-| `SPEC.md` | Full build spec: roles, stack, screens, rules, PDF, API, phases, acceptance tests |
-| `CLAUDE.md` | Instructions Claude Code picks up automatically |
-| `db/schema.sql` | PostgreSQL 16 schema with seed checklist and AZ018 (tested) |
-| `prototype/` | The working claude.ai prototype (single HTML file) and diagram images |
-| `reference/` | Original paper Truck Inspection Sheet (AZ018) for the PDF layout |
-| `seed/` | Put the master vehicle list here as `vehicles.csv` when you have it |
+| Sign in: crew name + PIN (30-day session), supervisor/admin email + password, lockout after 5 wrong tries | done |
+| Home: search trucks; badges for last inspection (amber over 35 days), open repairs, draft, registration expired | done |
+| Truck page: start/resume, open repairs from all inspections, history | done |
+| Inspection form: same order as paper; damage pins with grey dots from last time; photos on pins and repairs; trailer section; finger signature; save bar lists what's missing | done |
+| Offline: draft autosaves to the phone (IndexedDB); uploads retry with backoff; "Saved on phone, not yet uploaded"; duplicate-proof submit (`client_id`) | done |
+| Inspection detail: repairs first, pins, photo gallery, full checklist, supervisor sign-off, resolve repairs | done |
+| PDF export matching the paper form (page 1 sheet, page 2 trailer + signatures, photo pages) | done |
+| Admin: users and PINs, trucks and diagrams | basic (polish is phase 2) |
+| Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | written, **not yet run on a VM** |
 
-## Using it with Claude Code
+Phase 2 (not started): repairs board, batch PDF/CSV export, checklist editor, polished admin.
 
-```bash
-mkdir gc-inspections && cd gc-inspections
-unzip ~/Downloads/gc-inspections-handoff.zip
-git init && git add . && git commit -m "Handoff package"
-claude
+## Layout
+
+```
+src/                 Fastify API (TypeScript, run directly by Node 24, no build step)
+  routes/            auth, vehicles, photos, inspections, admin
+  pdf.ts             paper-form HTML template -> PDF via headless Chromium
+  storage.ts         photo/signature storage (local disk today; S3/Azure later behind the same interface)
+public/              the web app (plain HTML/CSS/JS modules, no framework), service worker, diagrams
+db/migrations/       numbered SQL migrations, applied automatically on start
+seed/vehicles.csv    trucks added on start if missing (never overwrites edits made in Admin)
+scripts/             backup.sh (nightly, run by the backup container), restore.sh
+test/                API tests against a real Postgres
+prototype/, reference/   the approved claude.ai prototype and the original paper forms
 ```
 
-First prompt to use:
+## Run it on the server
 
-> Read CLAUDE.md and SPEC.md. Propose the project layout and a short plan for the phase 1 MVP, then build it. Start with docker compose (Postgres + app + Caddy) so I can run it on my Ubuntu VM.
+See [docs/DEPLOY.md](docs/DEPLOY.md). Short version:
 
-Before the pilot: drop the other 9 paper forms into `reference/`, and the vehicle list into `seed/vehicles.csv` (truck_code, unit, vin, plate, year, make, model, registration_expires, pulls_trailer).
+```bash
+cp .env.example .env    # then edit passwords, admin email, site address
+docker compose up -d --build
+```
+
+## Develop locally (no Docker)
+
+Needs Node 24+ and a Postgres 16 database.
+
+```bash
+npm install
+npx playwright install chromium        # for PDF export
+```
+
+Create `.env.local` (gitignored) with at least `DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, then:
+
+```bash
+npm run dev                            # http://localhost:3000, migrations run on start
+npm run user -- add --name "Test Crew" --role crew --pin 1234
+npm run typecheck
+TEST_DATABASE_URL=postgres://user:pass@localhost:5432/gc_test npm test   # wipes that database
+```
+
+Changes under `public/` need a server restart so the service worker picks up the new version.

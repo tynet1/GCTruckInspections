@@ -1,0 +1,419 @@
+import type { FastifyInstance } from "fastify";
+import type { PoolClient } from "pg";
+import { requireRole, requireUser } from "../auth.ts";
+import { one, q, tx } from "../db.ts";
+import { defaultDiagram, diagramUrl } from "../diagrams.ts";
+import {
+  bad, conflict, DATE_RE, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE, uuidParam,
+} from "../http.ts";
+import { renderInspectionPdf } from "../pdf.ts";
+import { decodePngDataUrl, files, newKey } from "../storage.ts";
+
+type Section = "exterior" | "interior" | "trailer";
+
+interface ItemIn { checklist_item_id: number; result: "ok" | "repair"; note: string | null }
+interface DamageIn { key: string; diagram: "truck" | "trailer"; x: number; y: number; note: string | null }
+interface PhotoIn { id: string; caption: string | null; damage_key: string | null; checklist_item_id: number | null }
+
+export interface SubmitInput {
+  client_id: string;
+  vehicle_id: number;
+  inspection_date: string;
+  inspector_name: string;
+  mileage: number;
+  oil_change_due: boolean;
+  existing_notes: string | null;
+  new_observations: string | null;
+  comments: string | null;
+  trailer: { number: string | null; plate: string | null } | null;
+  items: ItemIn[];
+  damage: DamageIn[];
+  photos: PhotoIn[];
+  signature: Buffer;
+}
+
+function arr(v: unknown, field: string, max: number): unknown[] {
+  if (v == null) return [];
+  if (!Array.isArray(v)) throw bad(`${field} must be a list.`);
+  if (v.length > max) throw bad(`Too many ${field}.`);
+  return v;
+}
+
+function frac(v: unknown, field: string): number {
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 1) throw bad(`${field} must be between 0 and 1.`);
+  return Math.round(v * 10000) / 10000;
+}
+
+/** Shape-check the submit body. Business rules that need the database are checked in submitInspection. */
+export function parseSubmit(body: unknown): SubmitInput {
+  const b = obj(body);
+  const clientId = String(b.client_id ?? "").toLowerCase();
+  if (!UUID_RE.test(clientId)) throw bad("client_id must be a uuid.");
+  const date = String(b.inspection_date ?? "");
+  if (!DATE_RE.test(date) || !isValidDate(date)) throw bad("Date is required.");
+  const today = new Date();
+  const max = new Date(today.getTime() + 2 * 86400_000).toISOString().slice(0, 10);
+  if (date > max || date < "2020-01-01") throw bad("Date looks wrong. Check the inspection date.");
+  if (typeof b.oil_change_due !== "boolean") throw bad("Answer whether an oil change is due.");
+  const sig = decodePngDataUrl(b.signature);
+  if (!sig) throw bad("Employee signature is required.");
+
+  let trailer: SubmitInput["trailer"] = null;
+  if (b.trailer != null) {
+    const t = obj(b.trailer, "trailer");
+    trailer = { number: str(t.number, "Trailer number", 50), plate: str(t.plate, "Trailer plate", 20) };
+  }
+
+  const items = arr(b.items, "checklist items", 200).map((x, i): ItemIn => {
+    const o = obj(x, `item ${i + 1}`);
+    if (o.result !== "ok" && o.result !== "repair") throw bad("Each checklist item must be OK or Repair.");
+    return { checklist_item_id: int(o.checklist_item_id, "checklist_item_id", 1), result: o.result, note: str(o.note, "Repair note", 1000) };
+  });
+
+  const keys = new Set<string>();
+  const damage = arr(b.damage, "damage marks", 99).map((x, i): DamageIn => {
+    const o = obj(x, `damage mark ${i + 1}`);
+    const key = String(o.key ?? "");
+    if (!/^[\w-]{1,40}$/.test(key) || keys.has(key)) throw bad("Each damage mark needs a unique key.");
+    keys.add(key);
+    if (o.diagram !== "truck" && o.diagram !== "trailer") throw bad("Damage mark diagram must be truck or trailer.");
+    return { key, diagram: o.diagram, x: frac(o.x, "x"), y: frac(o.y, "y"), note: str(o.note, "Damage note", 500) };
+  });
+
+  const photoIds = new Set<string>();
+  const photos = arr(b.photos, "photos", 60).map((x): PhotoIn => {
+    const o = obj(x, "photo");
+    const id = String(o.id ?? "").toLowerCase();
+    if (!UUID_RE.test(id) || photoIds.has(id)) throw bad("Each photo needs a unique id.");
+    photoIds.add(id);
+    const damageKey = o.damage_key == null ? null : String(o.damage_key);
+    if (damageKey && !keys.has(damageKey)) throw bad("Photo points at a damage mark that isn't in this inspection.");
+    return {
+      id,
+      caption: str(o.caption, "Photo caption", 300),
+      damage_key: damageKey,
+      checklist_item_id: o.checklist_item_id == null ? null : int(o.checklist_item_id, "checklist_item_id", 1),
+    };
+  });
+
+  return {
+    client_id: clientId,
+    vehicle_id: int(b.vehicle_id, "vehicle_id", 1),
+    inspection_date: date,
+    inspector_name: reqStr(b.inspector_name, "Inspector name", 100),
+    mileage: int(b.mileage, "Mileage", 0, 9_999_999),
+    oil_change_due: b.oil_change_due,
+    existing_notes: str(b.existing_notes, "Existing notes", 5000),
+    new_observations: str(b.new_observations, "New observations", 5000),
+    comments: str(b.comments, "Comments", 5000),
+    trailer,
+    items,
+    damage,
+    photos,
+    signature: sig,
+  };
+}
+
+async function existingByClientId(clientId: string) {
+  return one<{ id: string; mileage_flagged: boolean }>(
+    `SELECT id, mileage_flagged FROM inspections WHERE client_id = $1`, [clientId]);
+}
+
+/**
+ * Validate against the database and store the inspection. Idempotent on client_id:
+ * a retried submit returns the record that already exists.
+ */
+export async function submitInspection(input: SubmitInput, userId: number) {
+  const dup = await existingByClientId(input.client_id);
+  if (dup) return { ...dup, duplicate: true };
+
+  const vehicle = await one(`SELECT id FROM vehicles WHERE id = $1 AND active`, [input.vehicle_id]);
+  if (!vehicle) throw bad("That truck isn't in the active fleet.");
+
+  // Every active checklist item in the visible sections must be answered, and nothing else.
+  const sections: Section[] = input.trailer ? ["exterior", "interior", "trailer"] : ["exterior", "interior"];
+  const checklist = await q<{ id: number; section: Section; label: string }>(
+    `SELECT id, section, label FROM checklist_items WHERE active AND section = ANY($1::checklist_section[]) ORDER BY section, sort_order`,
+    [sections],
+  );
+  const byId = new Map(checklist.map((c) => [c.id, c]));
+  const answered = new Map<number, ItemIn>();
+  for (const it of input.items) {
+    if (!byId.has(it.checklist_item_id)) {
+      throw new HttpError(422, "The checklist changed since this form was opened. Reload the form and check the items again.", { code: "checklist_changed" });
+    }
+    if (answered.has(it.checklist_item_id)) throw bad("A checklist item was answered twice.");
+    answered.set(it.checklist_item_id, it);
+  }
+  const missing = checklist.filter((c) => !answered.has(c.id));
+  if (missing.length) {
+    throw new HttpError(422, `${missing.length} checklist item(s) still need an answer.`, { missing: missing.map((m) => m.id) });
+  }
+  const noNote = input.items.filter((i) => i.result === "repair" && !i.note);
+  if (noNote.length) {
+    throw new HttpError(422, "Every Repair needs a short note.", { missing_notes: noNote.map((i) => i.checklist_item_id) });
+  }
+  for (const p of input.photos) {
+    if (p.checklist_item_id != null && !answered.has(p.checklist_item_id)) throw bad("Photo points at a checklist item that isn't in this inspection.");
+  }
+
+  // Photos must already be uploaded (by this user) and not attached to another inspection.
+  if (input.photos.length) {
+    const ids = input.photos.map((p) => p.id);
+    const found = await q(`SELECT id, inspection_id, uploaded_by FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
+    const ok = new Set(found.filter((f) => f.inspection_id == null && f.uploaded_by === userId).map((f) => f.id));
+    const notReady = ids.filter((id) => !ok.has(id));
+    if (notReady.length) {
+      throw new HttpError(422, "Some photos haven't finished uploading yet.", { code: "photos_missing", photos: notReady });
+    }
+  }
+
+  const prev = await one<{ mileage: number | null }>(
+    `SELECT mileage FROM inspections WHERE vehicle_id = $1 ORDER BY inspection_date DESC, created_at DESC LIMIT 1`,
+    [input.vehicle_id],
+  );
+  const previousMileage = prev?.mileage ?? null;
+  const mileageFlagged = previousMileage != null && input.mileage < previousMileage;
+
+  const sigKey = newKey("png");
+  await files.put(sigKey, input.signature);
+
+  try {
+    return await tx(async (c) => {
+      const ins = await c.query(
+        `INSERT INTO inspections (
+           client_id, vehicle_id, trailer_id, trailer_number_text, trailer_plate_text, trailer_inspected,
+           inspection_date, inspector_user_id, inspector_name, mileage, oil_change_due,
+           existing_notes, new_observations, comments, employee_signature_path, previous_mileage, mileage_flagged)
+         VALUES ($1, $2,
+           (SELECT id FROM trailers WHERE active AND lower(trailer_number) = lower($3) LIMIT 1), $3, $4, $5,
+           $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         ON CONFLICT (client_id) DO NOTHING
+         RETURNING id, mileage_flagged`,
+        [
+          input.client_id, input.vehicle_id, input.trailer?.number ?? null, input.trailer?.plate ?? null, !!input.trailer,
+          input.inspection_date, userId, input.inspector_name, input.mileage, input.oil_change_due,
+          input.existing_notes, input.new_observations, input.comments, sigKey, previousMileage, mileageFlagged,
+        ],
+      );
+      if (!ins.rows[0]) throw new DuplicateSubmit();
+      const id: string = ins.rows[0].id;
+      await insertChildren(c, id, input, checklist);
+      return { id, mileage_flagged: ins.rows[0].mileage_flagged as boolean, duplicate: false };
+    });
+  } catch (e) {
+    await files.remove(sigKey).catch(() => {});
+    if (e instanceof DuplicateSubmit) {
+      const d = await existingByClientId(input.client_id);
+      if (d) return { ...d, duplicate: true };
+    }
+    throw e;
+  }
+}
+
+class DuplicateSubmit extends Error {}
+
+async function insertChildren(c: PoolClient, id: string, input: SubmitInput, checklist: { id: number; section: Section; label: string }[]) {
+  const answers = new Map(input.items.map((i) => [i.checklist_item_id, i]));
+  const itemIds = new Map<number, number>();
+  for (const ci of checklist) {
+    const a = answers.get(ci.id)!;
+    const r = await c.query(
+      `INSERT INTO inspection_items (inspection_id, checklist_item_id, section, label_snapshot, result, note)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [id, ci.id, ci.section, ci.label, a.result, a.result === "repair" ? a.note : null],
+    );
+    itemIds.set(ci.id, r.rows[0].id);
+  }
+  const markIds = new Map<string, number>();
+  const seq = { truck: 0, trailer: 0 };
+  for (const d of input.damage) {
+    if (d.diagram === "trailer" && !input.trailer) continue;
+    const r = await c.query(
+      `INSERT INTO damage_marks (inspection_id, diagram, seq, x, y, note) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [id, d.diagram, ++seq[d.diagram], d.x, d.y, d.note],
+    );
+    markIds.set(d.key, r.rows[0].id);
+  }
+  for (const p of input.photos) {
+    const r = await c.query(
+      `UPDATE photos SET inspection_id = $2, caption = $3, damage_mark_id = $4, inspection_item_id = $5
+        WHERE id = $1 AND inspection_id IS NULL`,
+      [p.id, id, p.caption, p.damage_key ? markIds.get(p.damage_key) ?? null : null,
+        p.checklist_item_id ? itemIds.get(p.checklist_item_id) ?? null : null],
+    );
+    if (r.rowCount !== 1) throw conflict("A photo was attached to another inspection. Remove it and try again.");
+  }
+}
+
+/** Everything about one inspection, for the detail screen and the PDF. */
+export async function loadInspection(id: string) {
+  const i = await one(
+    `SELECT i.*, v.truck_code, v.unit, v.vin, v.plate, v.year, v.make, v.model, v.registration_expires,
+            d.id AS diagram_id, d.file_path AS diagram_path
+       FROM inspections i
+       JOIN vehicles v ON v.id = i.vehicle_id
+       LEFT JOIN diagrams d ON d.id = v.diagram_id
+      WHERE i.id = $1`,
+    [id],
+  );
+  if (!i) return null;
+  const items = await q(
+    `SELECT ii.id, ii.checklist_item_id, ii.section, ii.label_snapshot AS label, ii.result, ii.note,
+            ii.resolved_at, ii.resolution_note, ru.name AS resolved_by_name
+       FROM inspection_items ii
+       LEFT JOIN checklist_items ci ON ci.id = ii.checklist_item_id
+       LEFT JOIN users ru ON ru.id = ii.resolved_by
+      WHERE ii.inspection_id = $1
+      ORDER BY ii.section, ci.sort_order NULLS LAST, ii.id`,
+    [id],
+  );
+  const damage = await q(
+    `SELECT id, diagram, seq, x, y, note FROM damage_marks WHERE inspection_id = $1 ORDER BY diagram, seq`, [id]);
+  const photos = await q(
+    `SELECT id, caption, damage_mark_id, inspection_item_id, file_path FROM photos WHERE inspection_id = $1 ORDER BY created_at, id`,
+    [id],
+  );
+  const truckFallback = await defaultDiagram("truck");
+  const trailerDiagram = await defaultDiagram("trailer");
+  return {
+    inspection: i,
+    items,
+    damage,
+    photos,
+    truckDiagram: { id: i.diagram_id ?? truckFallback?.id ?? null, file_path: i.diagram_path ?? truckFallback?.file_path ?? null },
+    trailerDiagram: trailerDiagram ?? null,
+  };
+}
+
+export default async function inspectionRoutes(app: FastifyInstance) {
+  app.get("/inspections", async (req) => {
+    requireUser(req);
+    const qs = (req.query ?? {}) as Record<string, string | undefined>;
+    const limit = Math.min(Number(qs.limit) || 30, 200);
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (qs.status === "submitted" || qs.status === "reviewed") {
+      params.push(qs.status);
+      where.push(`i.status = $${params.length}`);
+    }
+    if (qs.vehicle_id && /^\d+$/.test(qs.vehicle_id)) {
+      params.push(Number(qs.vehicle_id));
+      where.push(`i.vehicle_id = $${params.length}`);
+    }
+    params.push(limit);
+    return q(
+      `SELECT i.id, i.vehicle_id, v.truck_code, i.inspection_date, i.inspector_name, i.mileage, i.status, i.mileage_flagged,
+              (SELECT count(*) FROM inspection_items ii WHERE ii.inspection_id = i.id AND ii.result = 'repair') AS repair_count
+         FROM inspections i JOIN vehicles v ON v.id = i.vehicle_id
+        ${where.length ? "WHERE " + where.join(" AND ") : ""}
+        ORDER BY i.created_at DESC LIMIT $${params.length}`,
+      params,
+    );
+  });
+
+  app.post("/inspections", { bodyLimit: 3 * 1024 * 1024 }, async (req, reply) => {
+    const user = requireUser(req);
+    const input = parseSubmit(req.body);
+    const out = await submitInspection(input, user.id);
+    return reply.code(out.duplicate ? 200 : 201).send(out);
+  });
+
+  app.get("/inspections/:id", async (req) => {
+    requireUser(req);
+    const data = await loadInspection(uuidParam(req.params));
+    if (!data) throw notFound("Inspection not found.");
+    const { inspection: i, items, damage, photos, truckDiagram, trailerDiagram } = data;
+    return {
+      id: i.id,
+      status: i.status,
+      vehicle: {
+        id: i.vehicle_id, truck_code: i.truck_code, unit: i.unit, vin: i.vin, plate: i.plate,
+        year: i.year, make: i.make, model: i.model,
+      },
+      inspection_date: i.inspection_date,
+      inspector_name: i.inspector_name,
+      mileage: i.mileage,
+      previous_mileage: i.previous_mileage,
+      mileage_flagged: i.mileage_flagged,
+      oil_change_due: i.oil_change_due,
+      existing_notes: i.existing_notes,
+      new_observations: i.new_observations,
+      comments: i.comments,
+      trailer: i.trailer_inspected ? { number: i.trailer_number_text, plate: i.trailer_plate_text } : null,
+      created_at: i.created_at,
+      items,
+      damage,
+      photos: photos.map(({ file_path, ...p }) => p),
+      truck_diagram_url: diagramUrl(truckDiagram.id, truckDiagram.file_path),
+      trailer_diagram_url: trailerDiagram ? diagramUrl(trailerDiagram.id, trailerDiagram.file_path) : null,
+      employee_signature_url: `/api/inspections/${i.id}/signature/employee`,
+      supervisor: i.status === "reviewed"
+        ? {
+          name: i.supervisor_name, signed_at: i.supervisor_signed_at, note: i.supervisor_note,
+          signature_url: `/api/inspections/${i.id}/signature/supervisor`,
+        }
+        : null,
+    };
+  });
+
+  app.get("/inspections/:id/signature/:who", async (req, reply) => {
+    requireUser(req);
+    const who = (req.params as { who: string }).who;
+    if (who !== "employee" && who !== "supervisor") throw notFound();
+    const col = who === "employee" ? "employee_signature_path" : "supervisor_signature_path";
+    const r = await one(`SELECT ${col} AS path FROM inspections WHERE id = $1`, [uuidParam(req.params)]);
+    if (!r?.path) throw notFound();
+    return reply.type("image/png").header("cache-control", "private, max-age=31536000, immutable").send(files.stream(r.path));
+  });
+
+  app.post("/inspections/:id/review", { preHandler: requireRole("supervisor") }, async (req) => {
+    const user = req.user!;
+    const id = uuidParam(req.params);
+    const b = obj(req.body);
+    const sig = decodePngDataUrl(b.signature);
+    if (!sig) throw bad("Supervisor signature is required.");
+    const note = str(b.note, "Supervisor note", 2000);
+    const name = str(b.name, "Supervisor name", 100) ?? user.name;
+    const key = newKey("png");
+    await files.put(key, sig);
+    const r = await one(
+      `UPDATE inspections SET status = 'reviewed', supervisor_user_id = $2, supervisor_name = $3,
+              supervisor_signature_path = $4, supervisor_signed_at = now(), supervisor_note = $5
+        WHERE id = $1 AND status = 'submitted' RETURNING id`,
+      [id, user.id, name, key, note],
+    );
+    if (!r) {
+      await files.remove(key).catch(() => {});
+      const exists = await one(`SELECT status FROM inspections WHERE id = $1`, [id]);
+      if (!exists) throw notFound("Inspection not found.");
+      throw conflict("This inspection was already signed off.");
+    }
+    return { ok: true };
+  });
+
+  app.post("/inspection-items/:id/resolve", { preHandler: requireRole("supervisor") }, async (req) => {
+    const id = idParam(req.params);
+    const b = obj(req.body ?? {});
+    const note = reqStr(b.note, "Resolution note", 1000);
+    const r = await one(
+      `UPDATE inspection_items SET resolved_at = now(), resolved_by = $2, resolution_note = $3
+        WHERE id = $1 AND result = 'repair' AND resolved_at IS NULL RETURNING id`,
+      [id, req.user!.id, note],
+    );
+    if (!r) throw conflict("That repair is already resolved or isn't a repair item.");
+    return { ok: true };
+  });
+
+  app.get("/inspections/:id/pdf", { preHandler: requireRole("supervisor") }, async (req, reply) => {
+    const data = await loadInspection(uuidParam(req.params));
+    if (!data) throw notFound("Inspection not found.");
+    const pdf = await renderInspectionPdf(data);
+    const name = `${data.inspection.truck_code}_${data.inspection.inspection_date}_inspection.pdf`.replace(/[^\w.-]/g, "_");
+    return reply
+      .type("application/pdf")
+      .header("content-disposition", `attachment; filename="${name}"`)
+      .header("cache-control", "no-store")
+      .send(pdf);
+  });
+}
