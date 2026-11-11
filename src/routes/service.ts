@@ -17,6 +17,17 @@ export const CATEGORIES: Record<string, string> = {
   other: "Other",
 };
 
+/**
+ * Which open repairs the form ticks for you when you pick a type of work (matched on the checklist label,
+ * truck sections only). They're only suggestions: the shop sees the ticks and can untick anything not fixed.
+ */
+export const AUTO_TICK: Record<string, { match: string; not?: string; sections: string[] }> = {
+  oil_change: { match: "\\boil\\b", sections: ["exterior", "interior"] },
+  tires: { match: "\\btires?\\b", sections: ["exterior", "interior"] },
+  brakes: { match: "brake", not: "light", sections: ["exterior", "interior"] },
+  inspection: { match: "registration|license plate|reg tag", sections: ["exterior", "interior"] },
+};
+
 /** Fields an entry has, in the order the history shows them. */
 const FIELDS = [
   "service_date", "mileage", "category", "description", "parts", "cost", "performed_by", "vendor",
@@ -230,7 +241,7 @@ class DuplicateSave extends Error {}
 
 export default async function serviceRoutes(app: FastifyInstance) {
   app.get("/service-config", canRead, async () => ({
-    categories: Object.entries(CATEGORIES).map(([id, label]) => ({ id, label })),
+    categories: Object.entries(CATEGORIES).map(([id, label]) => ({ id, label, auto: AUTO_TICK[id] ?? null })),
   }));
 
   // A truck's maintenance history, plus what's due next.

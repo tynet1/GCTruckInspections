@@ -4,7 +4,7 @@ import { deleteDraft, flush, getDraft, sendQueued } from "../drafts.js";
 import { flushSvc, getSvcDraft, sendSvc } from "../svc.js";
 import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, fmtNum, toast, vehicleInfo } from "../util.js";
-import { inspectionRow, resolveRepair, SECTION_TITLES, serviceRow } from "./common.js";
+import { inspectionRow, repairButtons, resolveRepair, SECTION_TITLES, serviceRow } from "./common.js";
 
 let showAllService = false;
 let lastTruck = null;
@@ -53,11 +53,11 @@ export async function render(app, id) {
     h += `<a class="primary wide" style="margin:6px 0 4px" href="#/inspect/${v.id}">Start inspection</a>`;
   }
 
-  const canResolve = can.resolveRepairs();
+  const who = { canLog: can.logService(), canResolve: atLeast("supervisor") };
   h += `<h2>Open repairs (${openRepairs.length})</h2><div class="card">${openRepairs.length
     ? `<ul class="repairlist">${openRepairs.map((r) => `<li><div class="spread"><div><b>${esc(r.label)}</b> <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span>
         ${r.note ? `<div>${esc(r.note)}</div>` : ""}<a class="small" href="#/inspection/${esc(r.inspection_id)}">From ${fmtDate(r.inspection_date)} inspection</a></div>
-        ${canResolve ? `<button class="secondary" data-resolve="${r.id}" data-label="${esc(r.label)}">Resolve</button>` : ""}</div></li>`).join("")}</ul>`
+        ${repairButtons(r, v.id, who)}</div></li>`).join("")}</ul>`
     : `<span class="muted">No open repairs.</span>`}</div>`;
   if (svc) h += serviceSection(v, svc, svcDraft);
   h += `<h2>Inspection history</h2><div class="card list">${history.length

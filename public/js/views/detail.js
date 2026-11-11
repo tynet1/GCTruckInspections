@@ -3,7 +3,7 @@ import { api } from "../api.js";
 import { setupSig } from "../sig.js";
 import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, esc, fmtDate, fmtNum, lightbox, toast, vehicleInfo } from "../util.js";
-import { resolveRepair, SECTION_TITLES } from "./common.js";
+import { repairButtons, resolveRepair, SECTION_TITLES } from "./common.js";
 
 let sigPad = null;
 
@@ -61,13 +61,17 @@ export async function render(app, id) {
     <dt>Status</dt><dd>${i.status === "reviewed" ? '<span class="pill okk">Signed off</span>' : '<span class="pill grey">Awaiting sign-off</span>'}</dd>
   </dl>${isSup ? `<a class="secondary" style="width:100%;margin-top:12px" href="/api/inspections/${esc(i.id)}/pdf" download>Export PDF</a>` : ""}</div>`;
 
-  h += `<h2>Repairs needed (${repairs.length})</h2><div class="card">${repairs.length
+  const openCount = repairs.filter((r) => !r.resolved_at).length;
+  h += `<h2>${repairs.length && !openCount ? `Repairs (${repairs.length}, all fixed)` : `Repairs needed (${openCount})`}</h2><div class="card">${repairs.length
     ? `<ul class="repairlist">${repairs.map((r) => `<li><div class="spread" style="align-items:flex-start"><div>
         <b>${esc(r.label)}</b> <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span>
         ${r.note ? `<div>${esc(r.note)}</div>` : ""}
-        ${r.resolved_at ? `<div class="small" style="color:var(--ok)">✓ Resolved ${fmtDate(r.resolved_at)}${r.resolved_by_name ? ` by ${esc(r.resolved_by_name)}` : ""}: ${esc(r.resolution_note)}</div>` : ""}
+        ${r.resolved_at ? (r.service_log_id
+          ? `<div class="small" style="color:var(--ok)">✓ Fixed ${fmtDate(r.resolved_at)}${r.resolved_by_name ? ` by ${esc(r.resolved_by_name)}` : ""}${
+            can.seeService() ? ` · <a href="#/service/${esc(r.service_log_id)}">See maintenance entry</a>` : " (maintenance log)"}</div>`
+          : `<div class="small" style="color:var(--ok)">✓ Resolved ${fmtDate(r.resolved_at)}${r.resolved_by_name ? ` by ${esc(r.resolved_by_name)}` : ""}: ${esc(r.resolution_note)}</div>`) : ""}
         ${thumbs(i.photos.filter((p) => p.inspection_item_id === r.id))}</div>
-        ${can.resolveRepairs() && !r.resolved_at ? `<button class="secondary" data-resolve="${r.id}" data-label="${esc(r.label)}">Resolve</button>` : ""}</div></li>`).join("")}</ul>`
+        ${r.resolved_at ? "" : repairButtons(r, v.id, { canLog: can.logService(), canResolve: isSup })}</div></li>`).join("")}</ul>`
     : `<span class="muted">Everything marked OK.</span>`}</div>`;
 
   const dia = (url, list) => `<div class="diagram ro"><img src="${esc(url)}" alt="">${list.map((m) => `<span class="pin" style="left:${m.x * 100}%;top:${m.y * 100}%">${m.seq}</span>`).join("")}</div>

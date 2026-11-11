@@ -44,14 +44,29 @@ export function resolveRepair(itemId, label) {
   });
 }
 
+/**
+ * Buttons for an open repair: the shop logs the fix in the maintenance log (which closes it);
+ * a supervisor can also just mark it resolved with a note.
+ */
+export function repairButtons(r, vehicleId, { canLog, canResolve }) {
+  const b = [];
+  if (canLog) b.push(`<a class="secondary" href="#/service/new/${vehicleId}?fix=${r.id}">Log fix</a>`);
+  if (canResolve) b.push(`<button class="secondary" data-resolve="${r.id}" data-label="${esc(r.label)}">Resolve</button>`);
+  return b.length ? `<div class="btncol">${b.join("")}</div>` : "";
+}
+
 /** One row in an inspection list (home "recent", truck history, awaiting sign-off). */
 export function inspectionRow(i, { showTruck = true } = {}) {
   const n = Number(i.repair_count || 0);
+  const open = i.open_repair_count == null ? n : Number(i.open_repair_count);
+  const status = open
+    ? `<span class="pill bad">${open} open repair${open > 1 ? "s" : ""}</span>`
+    : n ? `<span class="pill okk">✓ Repairs fixed</span>` : `<span class="pill okk">All OK</span>`;
   return `<a class="item" href="#/inspection/${esc(i.id)}">
     <span>${showTruck ? `<b>${esc(i.truck_code)}</b> · ` : ""}${fmtDate(i.inspection_date)}<br>
       <span class="small muted">${esc(i.inspector_name || "")}${i.mileage != null ? ` · ${fmtNum(i.mileage)} mi` : ""}</span></span>
     <span class="row" style="justify-content:flex-end">
-      ${n ? `<span class="pill bad">${n} repair${n > 1 ? "s" : ""}</span>` : `<span class="pill okk">All OK</span>`}
+      ${status}
       ${i.mileage_flagged ? `<span class="pill warn">Mileage?</span>` : ""}
       ${i.status === "reviewed" ? "" : `<span class="pill grey">Unreviewed</span>`}
     </span></a>`;

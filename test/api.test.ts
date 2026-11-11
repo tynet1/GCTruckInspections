@@ -507,6 +507,24 @@ if (!url) {
       assert.ok(!v.openRepairs.some((r: { id: number }) => r.id === repairIds[0]));
     });
 
+    test("the inspection shows the repair as fixed, with a link to the entry", async () => {
+      const { inspection_id: inspId } = await one(`SELECT inspection_id FROM inspection_items WHERE id = $1`, [repairIds[0]]);
+      const d = (await inject("GET", `/inspections/${inspId}`, { cookie: crewCookie })).json();
+      assert.equal(d.items.find((x: { id: number }) => x.id === repairIds[0]).service_log_id, entryId);
+      assert.equal(d.items.find((x: { id: number }) => x.id === repairIds[1]).service_log_id, null);
+      const row = (await inject("GET", `/vehicles/${vehicleId}`, { cookie: crewCookie })).json().history
+        .find((x: { id: string }) => x.id === inspId);
+      assert.equal(row.repair_count, 2);
+      assert.equal(row.open_repair_count, 1);
+      const recent = (await inject("GET", "/inspections?limit=50", { cookie: crewCookie })).json().find((x: { id: string }) => x.id === inspId);
+      assert.equal(recent.open_repair_count, 1);
+      const cfg = (await inject("GET", "/service-config", { cookie: shopCookie })).json();
+      const tires = cfg.categories.find((c: { id: string }) => c.id === "tires");
+      assert.ok(new RegExp(tires.auto.match, "i").test("Tires properly inflated"));
+      const brakes = cfg.categories.find((c: { id: string }) => c.id === "brakes").auto;
+      assert.ok(new RegExp(brakes.not, "i").test("Brake lights working"), "brake lights aren't brake work");
+    });
+
     test("bad input is refused", async () => {
       const noWork = await inject("POST", "/service-logs", { cookie: shopCookie, body: entryBody({ description: " " }) });
       assert.equal(noWork.statusCode, 400);

@@ -60,6 +60,8 @@ export default async function vehicleRoutes(app: FastifyInstance) {
     const history = await q(
       `SELECT i.id, i.inspection_date, i.inspector_name, i.mileage, i.status, i.mileage_flagged,
               (SELECT count(*) FROM inspection_items ii WHERE ii.inspection_id = i.id AND ii.result = 'repair') AS repair_count,
+              (SELECT count(*) FROM inspection_items ii
+                WHERE ii.inspection_id = i.id AND ii.result = 'repair' AND ii.resolved_at IS NULL) AS open_repair_count,
               (SELECT count(*) FROM damage_marks dm WHERE dm.inspection_id = i.id) AS damage_count
          FROM inspections i WHERE i.vehicle_id = $1
         ORDER BY i.inspection_date DESC, i.created_at DESC LIMIT 200`,

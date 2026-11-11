@@ -73,6 +73,12 @@ Tunnel, which needs a domain on Tyler's Cloudflare account.
    mileage, type of work (oil change, tires, brakes, repair, preventive maintenance, inspection/registration, other), work done,
    parts, cost, done by, outside shop, the truck's open repairs to tick off, next due mileage/date, photos, notes. An entry
    shows its repairs, photos and every change ("Cost: $64.20 → $66.40"). Shop/admin can edit it or void it with a reason.
+   **Closing repairs:** every open repair (truck page and inspection) has a **Log fix** button for shop/admin that opens a new
+   entry with that repair ticked and the type of work picked. Picking a type of work also ticks matching open repairs
+   (oil change → engine oil; tires → tire items; brakes → brake items but not brake lights; inspection/registration → plate,
+   tag and registration items), shown with a "Matches …" label; a tick the shop set or cleared by hand is never changed.
+   Saving closes the ticked repairs; the inspection then shows "✓ Repairs fixed" (green) instead of red, and each fixed
+   repair links to its entry. Supervisors keep the quick **Resolve** (note only).
 7. **Admin:** trucks (add, edit every header field, retire, pick or upload the body diagram, set the trailer type or "no trailer"), trailer types (name + picture), users and PINs, branding (company name, app name, header color, logo), checklist items (add, reorder, deactivate; never hard-delete).
 
 A trailer type is a named trailer diagram. Every inspection records which truck and trailer pictures it was drawn on, so changing a truck's diagram or trailer type later never moves old pins.

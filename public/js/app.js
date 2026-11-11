@@ -19,7 +19,7 @@ const routes = [
   { re: /^#\/truck\/(\d+)$/, view: truck },
   { re: /^#\/inspect\/(\d+)$/, view: form },
   { re: /^#\/inspection\/([0-9a-f-]{36})$/i, view: detail },
-  { re: /^#\/service\/(new|edit)\/(\d+)$/, view: serviceForm, allow: () => can.logService() },
+  { re: /^#\/service\/(new|edit)\/(\d+)(?:\?fix=(\d+))?$/, view: serviceForm, allow: () => can.logService() },
   { re: /^#\/service\/(\d+)$/, view: serviceDetail, allow: () => can.seeService() },
   { re: /^#\/admin(?:\/(users|trucks|branding))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];

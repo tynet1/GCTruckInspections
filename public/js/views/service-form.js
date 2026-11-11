@@ -15,8 +15,11 @@ let saving = false;
 const blobUrls = new Map();
 const persist = debounce(() => { if (d && d.touched) saveSvcDraft(d); }, 400);
 
-/** mode "new": id is the truck id. mode "edit": id is the entry id. */
-export async function render(app, mode, id) {
+/**
+ * mode "new": id is the truck id. mode "edit": id is the entry id.
+ * fix: a repair item id from a "Log fix" button; it starts ticked.
+ */
+export async function render(app, mode, id, fix) {
   const nav = state.nav;
   const isEdit = mode === "edit";
   setHeader({ title: isEdit ? "Edit maintenance" : "Log maintenance", back: isEdit ? `#/service/${id}` : "#/" });
@@ -44,6 +47,7 @@ export async function render(app, mode, id) {
   d = draft;
   setActiveSvc(d);
   ctx = { app, vehicle, categories: config.categories, openRepairs, entry, currentMiles: history?.current_mileage ?? vehicle.last_mileage ?? null };
+  if (fix && !isEdit) startFix(Number(fix));
   setHeader({
     title: isEdit ? "Edit maintenance" : d.touched ? "Maintenance draft" : "Log maintenance",
     sub: `${vehicle.truck_code} · ${vehicleInfo(vehicle)}`,
@@ -86,10 +90,68 @@ function draftFromEntry(key, e) {
 
 // ---------- Rendering ----------
 
+const linkedRepairs = () => (ctx.entry?.repairs || []).filter((r) => r.active);
+/** Open repairs on this truck that this entry can still fix. */
+const openRepairs = () => ctx.openRepairs.filter((r) => !linkedRepairs().some((l) => l.id === r.id));
+
+function repairsHtml() {
+  const linked = linkedRepairs();
+  const open = openRepairs();
+  const auto = d.autoRepairs || [];
+  const catLabel = ctx.categories.find((c) => c.id === d.category)?.label || "";
+  let h = linked.map((r) => `<div class="pick done"><span class="tick">✓</span><span><b>${esc(r.label)}</b><br>
+      <span class="small muted">Fixed by this entry · from ${fmtDate(r.inspection_date)} inspection</span></span></div>`).join("");
+  if (!open.length) return h || `<span class="muted">No open repairs on ${esc(ctx.vehicle.truck_code)}.</span>`;
+  h += open.map((r) => `<label class="pick"><input type="checkbox" data-rep="${r.id}" ${d.repairs.includes(r.id) ? "checked" : ""}>
+      <span><b>${esc(r.label)}</b> <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span>
+      ${auto.includes(r.id) && d.repairs.includes(r.id) ? `<span class="pill">Matches ${esc(catLabel)}</span>` : ""}<br>
+      <span class="small muted">${r.note ? `${esc(r.note)} · ` : ""}from ${fmtDate(r.inspection_date)} inspection</span></span></label>`).join("");
+  h += `<p class="small muted" style="margin:8px 0 0">Ticked repairs are marked fixed when you save${
+    auto.some((id) => d.repairs.includes(id)) ? ". Repairs that match the type of work are ticked for you; untick any you didn't fix." : "."}</p>`;
+  return h;
+}
+
+const redrawRepairs = () => {
+  const el = $("#s-repairs");
+  if (el) el.innerHTML = repairsHtml();
+};
+
+/** Open repairs that match a type of work (the rules come from the server with the categories). */
+function autoMatches(category) {
+  const rule = ctx.categories.find((c) => c.id === category)?.auto;
+  if (!rule) return [];
+  const re = new RegExp(rule.match, "i");
+  const not = rule.not ? new RegExp(rule.not, "i") : null;
+  return openRepairs()
+    .filter((r) => rule.sections.includes(r.section) && re.test(r.label) && !(not && not.test(r.label)))
+    .map((r) => r.id);
+}
+
+/** Picking a type of work ticks the matching repairs; ticks the shop made by hand are never removed. */
+function applyAuto(category) {
+  const prevAuto = d.autoRepairs || [];
+  const manual = d.repairs.filter((id) => !prevAuto.includes(id));
+  const auto = autoMatches(category).filter((id) => !manual.includes(id));
+  d.repairs = [...manual, ...auto];
+  d.autoRepairs = auto;
+  redrawRepairs();
+  if (auto.length) toast(`Ticked ${auto.length} matching repair${auto.length > 1 ? "s" : ""}. Untick any you didn't fix.`, 3500);
+}
+
+/** Came from a repair's "Log fix" button: tick it, and pick the type of work if none is chosen yet. */
+function startFix(itemId) {
+  const item = openRepairs().find((r) => r.id === itemId);
+  if (!item) return;
+  if (!d.repairs.includes(itemId)) d.repairs.push(itemId);
+  d.autoRepairs = (d.autoRepairs || []).filter((id) => id !== itemId); // a deliberate pick, not a suggestion
+  if (!d.category) {
+    d.category = ctx.categories.find((c) => c.auto && autoMatches(c.id).includes(itemId))?.id || "repair";
+  }
+  d.touched = true;
+  saveSvcDraft(d);
+}
+
 function draw() {
-  const v = ctx.vehicle;
-  const linked = (ctx.entry?.repairs || []).filter((r) => r.active);
-  const open = ctx.openRepairs.filter((r) => !linked.some((l) => l.id === r.id));
   const changedOnServer = d.entryId && ctx.entry && d.version !== ctx.entry.version;
   let h = "";
   if (d.lastError) h += `<div class="banner err">${esc(d.lastError)}</div>`;
@@ -116,16 +178,7 @@ function draw() {
     </div>
   </div>`;
 
-  h += `<h2>Repairs this fixed</h2><div class="card">`;
-  h += linked.map((r) => `<div class="pick done"><span class="tick">✓</span><span><b>${esc(r.label)}</b><br>
-      <span class="small muted">Fixed by this entry · from ${fmtDate(r.inspection_date)} inspection</span></span></div>`).join("");
-  h += open.length
-    ? open.map((r) => `<label class="pick"><input type="checkbox" data-rep="${r.id}" ${d.repairs.includes(r.id) ? "checked" : ""}>
-        <span><b>${esc(r.label)}</b> <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span><br>
-        <span class="small muted">${r.note ? `${esc(r.note)} · ` : ""}from ${fmtDate(r.inspection_date)} inspection</span></span></label>`).join("")
-      + `<p class="small muted" style="margin:8px 0 0">Ticked repairs are marked fixed when you save.</p>`
-    : linked.length ? "" : `<span class="muted">No open repairs on ${esc(v.truck_code)}.</span>`;
-  h += `</div>`;
+  h += `<h2>Repairs this fixed</h2><div class="card" id="s-repairs">${repairsHtml()}</div>`;
 
   h += `<h2>Next service due</h2><div class="card"><div class="fields">
       <div><label class="f" for="s-nmi">At mileage</label><input class="t" id="s-nmi" inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="${esc(d.nextMiles)}" placeholder="Optional"></div>
@@ -218,6 +271,8 @@ function wire() {
     if (t.dataset.rep) {
       const id = Number(t.dataset.rep);
       d.repairs = t.checked ? [...new Set([...d.repairs, id])] : d.repairs.filter((x) => x !== id);
+      d.autoRepairs = (d.autoRepairs || []).filter((x) => x !== id); // the shop decided this one by hand
+      redrawRepairs();
       return changed();
     }
     if (t.id === "s-phIn" && t.files?.length) {
@@ -230,8 +285,10 @@ function wire() {
     const t = e.target.closest("button");
     if (!t) return;
     if (t.dataset.cat) {
+      if (d.category === t.dataset.cat) return;
       d.category = t.dataset.cat;
       $$("#s-cat button").forEach((b) => { b.classList.toggle("on", b === t); b.setAttribute("aria-pressed", String(b === t)); });
+      applyAuto(d.category);
       return changed();
     }
     if (t.dataset.phx) {

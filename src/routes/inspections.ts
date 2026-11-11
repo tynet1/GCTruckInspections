@@ -273,7 +273,9 @@ export async function loadInspection(id: string) {
   if (!i) return null;
   const items = await q(
     `SELECT ii.id, ii.checklist_item_id, ii.section, ii.label_snapshot AS label, ii.result, ii.note,
-            ii.resolved_at, ii.resolution_note, ru.name AS resolved_by_name
+            ii.resolved_at, ii.resolution_note, ru.name AS resolved_by_name,
+            (SELECT r.service_log_id FROM service_log_repairs r
+              WHERE r.inspection_item_id = ii.id AND r.active) AS service_log_id
        FROM inspection_items ii
        LEFT JOIN checklist_items ci ON ci.id = ii.checklist_item_id
        LEFT JOIN users ru ON ru.id = ii.resolved_by
@@ -319,7 +321,9 @@ export default async function inspectionRoutes(app: FastifyInstance) {
     params.push(limit);
     return q(
       `SELECT i.id, i.vehicle_id, v.truck_code, i.inspection_date, i.inspector_name, i.mileage, i.status, i.mileage_flagged,
-              (SELECT count(*) FROM inspection_items ii WHERE ii.inspection_id = i.id AND ii.result = 'repair') AS repair_count
+              (SELECT count(*) FROM inspection_items ii WHERE ii.inspection_id = i.id AND ii.result = 'repair') AS repair_count,
+              (SELECT count(*) FROM inspection_items ii
+                WHERE ii.inspection_id = i.id AND ii.result = 'repair' AND ii.resolved_at IS NULL) AS open_repair_count
          FROM inspections i JOIN vehicles v ON v.id = i.vehicle_id
         ${where.length ? "WHERE " + where.join(" AND ") : ""}
         ORDER BY i.created_at DESC LIMIT $${params.length}`,
