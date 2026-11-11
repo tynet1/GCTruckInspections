@@ -20,7 +20,7 @@ on the phone and upload when signal returns.
 | Inspection detail: repairs first, pins, photo gallery, full checklist, supervisor sign-off, resolve repairs | done |
 | PDF export matching the paper form (page 1 sheet, page 2 trailer + signatures, photo pages) | done |
 | Admin: users and PINs, trucks (every header field, trailer type, diagram), branding (name, color, logo) | done |
-| Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | written, **not yet run** |
+| Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | running on Tyler's PC (Docker Desktop) since 2026-11-11; backup and restore tested; tunnel not set up yet |
 
 ## Phase 2 (in progress)
 

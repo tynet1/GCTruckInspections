@@ -58,6 +58,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      # The app creates the tables on start; without this the first backup can run against an empty database.
+      app:
+        condition: service_healthy
     environment:
       PGHOST: db
       PGUSER: ${POSTGRES_USER:-gc}

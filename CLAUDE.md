@@ -38,7 +38,9 @@ npm run user -- add --name "X" --role crew --pin 1234
 - Every state-changing `/api` call needs the `x-gc-app: 1` header (CSRF guard); `public/js/api.js` adds it.
 - Everything runs with `docker compose up -d` on Ubuntu. Secrets go in `.env` (never committed); ship a `.env.example`.
   Local dev settings go in `.env.local` (also gitignored), so they never collide with the server's `.env`.
-- For now it runs on Tyler's Windows PC under Docker Desktop (needs WSL) and only Tyler's phone uses it.
+- For now it runs on Tyler's Windows PC under Docker Desktop (live since 2026-11-11, `docs/DEPLOY.md` "Windows PC") and
+  only Tyler's phone uses it. That stack holds real data: test against a separate `COMPOSE_PROJECT_NAME` (e.g. `gc-test`
+  on port 8080), never by submitting test inspections into it.
 - Phase 1 (MVP) is built, plus trailer types and branding. Phase 2: the maintenance log is built (`src/routes/service.ts`,
   `public/js/svc.js`, `views/service-*.js`), and so is batch PDF export (`views/export.js`, `public/js/zip.js`). Fleet
   management is next; confirm the open fleet-management questions in SPEC §9 with Tyler before building it.

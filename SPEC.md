@@ -92,7 +92,11 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - The phone keeps a draft until the server confirms it; submits are idempotent; uploads retry.
 - Files are written to a temp file, flushed to disk and renamed, so a crash never leaves a half-written photo.
 - Schema changes only add numbered migrations, each in one transaction.
-- Nightly backups (database + uploads) to a second location, and a restore is tested.
+- Nightly backups (database + uploads) to a second location, and a restore is tested (done 2026-11-11 on Tyler's PC: restored
+  data matched the backup row for row and file for file). A backup is written to a temp file and renamed only when complete,
+  never overwrites an existing backup, and runs one at a time. A restore first saves the current data as a `_before-restore`
+  backup, so a wrong restore can be undone.
+- The app survives the database restarting under it (a dropped connection is logged and replaced, not a crash).
 - Maintenance entries: never deleted (void with a reason; the database refuses deletes), every edit saves the previous version,
   an edit made from an out-of-date copy is refused instead of overwriting, and voiding reopens the repairs the entry closed.
   Orphan-photo cleanup skips photos attached to an entry.
@@ -191,4 +195,5 @@ POST /service-logs/:id/void         {reason}                                    
 - [ ] Turning Wi-Fi/cell off mid-form loses nothing; the submit succeeds when signal returns, and a double tap on Save creates one record.
 - [ ] A supervisor can sign off, and the PDF matches the paper layout, including pins, photos and both signatures.
 - [ ] The next inspection on that truck shows the previous pins as grey dots and prefills the notes.
-- [ ] `docker compose up -d` (on Tyler's PC with Docker Desktop for now) brings everything up; a restore from backup is tested once.
+- [x] `docker compose up -d` (on Tyler's PC with Docker Desktop for now) brings everything up; a restore from backup is tested once.
+  (2026-11-11: stack running; full flow, PDFs, backup, restore and undo checked on a throwaway copy of the stack.)

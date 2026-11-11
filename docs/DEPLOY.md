@@ -1,7 +1,10 @@
-# Deploying on an Ubuntu Server VM
+# Deploying
 
 Everything runs from `docker compose`: Postgres 16, the app (API + web app + Chromium for PDFs), Caddy in front,
 a nightly backup job, and optionally a Cloudflare Tunnel so phones on cellular can reach it.
+
+**Today it runs on Tyler's Windows PC under Docker Desktop** (see [Windows PC notes](#windows-pc-docker-desktop) below);
+sections 1–6 describe the Ubuntu VM it will move to later. The compose file is the same for both.
 
 ## 1. Prepare the VM
 
@@ -33,7 +36,7 @@ In `.env` set at least:
 ```bash
 docker compose up -d --build
 docker compose ps                 # all services "running", app "healthy" after ~30s
-docker compose logs -f app        # migrations, "created admin account", "added 38 truck(s)"
+docker compose logs -f app        # migrations, "created admin account", "added 38 truck(s)" (plus AZ018 from the migrations)
 ```
 
 Open `http://<vm-ip>/` from a browser on the same network and sign in with the admin email and password.
@@ -74,11 +77,13 @@ page even loads.
 
 The `backup` service runs every night after `BACKUP_HOUR` (default 2am, local `TZ`) and writes to `BACKUP_DIR`:
 
-- `db_YYYY-MM-DD_HHMM.dump`: full database (`pg_dump` custom format)
-- `uploads_YYYY-MM-DD_HHMM.tar.gz`: all photos, signatures and uploaded diagrams
+- `db_YYYY-MM-DD_HHMMSS.dump`: full database (`pg_dump` custom format)
+- `uploads_YYYY-MM-DD_HHMMSS.tar.gz`: all photos, signatures and uploaded diagrams
 
-Files older than `BACKUP_KEEP_DAYS` (default 30) are deleted. Point `BACKUP_DIR` at a second disk or a mounted
-NAS share; a backup on the same disk as the VM doesn't survive losing that disk.
+Files older than `BACKUP_KEEP_DAYS` (default 30) are deleted, but only after a new backup succeeded. Point `BACKUP_DIR`
+at a second disk or a mounted NAS share; a backup on the same disk as the VM doesn't survive losing that disk.
+Each file is written under a temporary name and renamed when complete, an existing backup is never overwritten, and
+only one backup runs at a time, so a file with a final name is always a whole backup.
 
 Take one right now and check it:
 
@@ -87,16 +92,28 @@ docker compose exec backup /bin/sh /backup.sh
 ls -lh backups/        # or your BACKUP_DIR
 ```
 
-### Test a restore (do this once before the pilot)
-
-Best done on a second, throwaway VM set up the same way:
+### Restore
 
 ```bash
-scripts/restore.sh backups/db_2026-11-10_0200.dump backups/uploads_2026-11-10_0200.tar.gz
+sh scripts/restore.sh backups/db_2026-11-11_020012.dump backups/uploads_2026-11-11_020012.tar.gz
 ```
 
-It asks you to type `RESTORE`, stops the app, replaces the database and photos, and starts the app again.
-Sign in and open a few inspections and their PDFs to confirm.
+It asks you to type `RESTORE`, then:
+
+1. saves the current data as `db_<now>_before-restore.dump` / `uploads_<now>_before-restore.tar.gz`;
+2. stops the app, replaces the database and photos, and starts the app again.
+
+Sign in and open a few inspections and their PDFs to confirm. If it was the wrong backup, restore the two
+`_before-restore` files the same way to put things back exactly as they were.
+
+To practice a restore without touching the real data, run a second copy of the stack under another name
+(it gets its own database, photos and ports), restore into that, then remove it:
+
+```bash
+COMPOSE_PROJECT_NAME=gc-test HTTP_PORT=8080 HTTPS_PORT=8443 BACKUP_DIR=./backups-test docker compose up -d --build
+COMPOSE_PROJECT_NAME=gc-test BACKUP_DIR=./backups-test sh scripts/restore.sh backups/db_....dump backups/uploads_....tar.gz
+COMPOSE_PROJECT_NAME=gc-test BACKUP_DIR=./backups-test docker compose down -v   # -v deletes only gc-test's volumes
+```
 
 ## 6. Updating
 
@@ -107,6 +124,24 @@ docker compose up -d --build
 
 Database migrations run automatically when the app starts. Phones pick up the new version the next time the
 app is opened (the service worker refreshes when the files change).
+
+## Windows PC (Docker Desktop)
+
+How it's set up on Tyler's PC (since 2026-11-11):
+
+- Needs WSL 2 (`wsl --install --no-distribution` in an admin PowerShell, then restart) and Docker Desktop.
+- The repo is at `C:\Code\GCTruckInspections`; `.env` there holds the database password and the first admin's
+  sign-in. Start or update the stack from that folder with `docker compose up -d --build`.
+- Phones on the same network open `http://<PC's IP>` (currently `192.168.30.124`; the address can change unless
+  IT reserves it). Docker Desktop added an inbound Windows Firewall rule, "Docker Desktop Backend"; if a phone can't
+  connect but `http://localhost` works on the PC, check that rule and whether the phone's Wi-Fi can reach the PC's network.
+- Plain `http://` by IP works for everything except the offline app shell and "Share as separate PDFs", which need
+  HTTPS (the Cloudflare Tunnel). Drafts still save on the phone over plain http.
+- It's only reachable while the PC is on and awake: turn on Docker Desktop's **Start Docker Desktop when you sign in**,
+  and set Windows not to sleep while plugged in. The containers restart on their own (`restart: unless-stopped`).
+- Run the scripts from **Git Bash** (`sh scripts/restore.sh ...`); they handle Git Bash's path rewriting.
+- Backups land in `C:\Code\GCTruckInspections\backups` (same disk as the data). Copy that folder somewhere else
+  regularly, e.g. a network share, until the app moves to a server with a proper second backup location.
 
 ## Troubleshooting
 
