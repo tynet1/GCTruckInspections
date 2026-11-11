@@ -214,8 +214,9 @@ POST /service-logs/:id/void         {reason}                                    
        lists and its pins leave "Damage on file" while it's deleted.
      - The submitted inspection itself stays read-only (the database triggers don't change): archived/deleted state lives
        in its own record (additive migration), with who, when and why, and every archive/delete/restore is kept as history.
-     - Open questions for Tyler: does archiving also take its open repairs and damage off the truck (or only deleting)?
-       Should anything ever be permanently erased, e.g. from a command-line tool after a backup, not from the app?
+     - **Deleted inspections are never erased (Tyler, 2026-11-11):** they stay recoverable from the Deleted list for good. No
+       purge, no automatic clean-up, and no erase tool.
+     - Open question for Tyler: does archiving also take its open repairs and damage off the truck, or only deleting?
    - **Fleet management:** add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
      and the rest of the truck's lifecycle. Scope to confirm with Tyler before building; proposed:
      status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage
