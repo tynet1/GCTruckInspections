@@ -178,7 +178,7 @@ export async function submitInspection(input: SubmitInput, userId: number) {
   }
 
   const prev = await one<{ mileage: number | null }>(
-    `SELECT mileage FROM inspections WHERE vehicle_id = $1 ORDER BY inspection_date DESC, created_at DESC LIMIT 1`,
+    `SELECT mileage FROM live_inspections WHERE vehicle_id = $1 ORDER BY inspection_date DESC, created_at DESC LIMIT 1`,
     [input.vehicle_id],
   );
   const previousMileage = prev?.mileage ?? null;
@@ -257,6 +257,48 @@ async function insertChildren(c: PoolClient, id: string, input: SubmitInput, che
   }
 }
 
+export type InspectionState = "active" | "archived" | "deleted";
+type StateAction = "archive" | "unarchive" | "delete" | "restore";
+
+/** Which state each action moves an inspection from and to. */
+const TRANSITIONS: Record<StateAction, { from: InspectionState[]; to: InspectionState }> = {
+  archive: { from: ["active"], to: "archived" },
+  unarchive: { from: ["archived"], to: "active" },
+  delete: { from: ["active", "archived"], to: "deleted" },
+  restore: { from: ["deleted"], to: "active" },
+};
+const ALREADY: Record<InspectionState, string> = {
+  active: "This inspection isn't archived or deleted.",
+  archived: "This inspection is already archived.",
+  deleted: "This inspection is deleted. Restore it first (Admin → Deleted).",
+};
+
+/**
+ * Archive, un-archive, delete or restore an inspection. The inspection row itself never changes (it's read-only);
+ * the state lives in inspection_states and every change is appended to inspection_state_history.
+ */
+export async function changeInspectionState(id: string, action: StateAction, userId: number, reason: string | null) {
+  const t = TRANSITIONS[action];
+  return tx(async (c) => {
+    // Lock the inspection so two people archiving/deleting at once are applied one after the other.
+    const insp = (await c.query(`SELECT id FROM inspections WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+    if (!insp) throw notFound("Inspection not found.");
+    const cur = (await c.query(`SELECT state FROM inspection_states WHERE inspection_id = $1`, [id])).rows[0];
+    const from = (cur?.state ?? "active") as InspectionState;
+    if (!t.from.includes(from)) throw conflict(ALREADY[from]);
+    await c.query(
+      `INSERT INTO inspection_states (inspection_id, state, reason, changed_at, changed_by) VALUES ($1, $2, $3, now(), $4)
+       ON CONFLICT (inspection_id) DO UPDATE SET state = $2, reason = $3, changed_at = now(), changed_by = $4`,
+      [id, t.to, t.to === "active" ? null : reason, userId],
+    );
+    await c.query(
+      `INSERT INTO inspection_state_history (inspection_id, action, reason, changed_by) VALUES ($1, $2, $3, $4)`,
+      [id, action, reason, userId],
+    );
+    return { state: t.to };
+  });
+}
+
 /** Everything about one inspection, for the detail screen and the PDF. */
 export async function loadInspection(id: string) {
   const i = await one(
@@ -291,8 +333,24 @@ export async function loadInspection(id: string) {
   );
   const truckFallback = i.diagram_id ? null : await defaultDiagram("truck");
   const trailerFallback = i.trailer_dia_id ? null : await defaultDiagram("trailer");
+  const state = await one(
+    `SELECT s.state, s.reason, s.changed_at, u.name AS changed_by_name
+       FROM inspection_states s JOIN users u ON u.id = s.changed_by WHERE s.inspection_id = $1`,
+    [id],
+  );
+  const stateHistory = await q(
+    `SELECT h.action, h.reason, h.changed_at, u.name AS changed_by_name
+       FROM inspection_state_history h JOIN users u ON u.id = h.changed_by
+      WHERE h.inspection_id = $1 ORDER BY h.changed_at, h.id`,
+    [id],
+  );
   return {
     inspection: i,
+    state: (state?.state ?? "active") as InspectionState,
+    stateInfo: state && state.state !== "active"
+      ? { reason: state.reason as string | null, changed_at: state.changed_at as string, changed_by_name: state.changed_by_name as string }
+      : null,
+    stateHistory,
     items,
     damage,
     photos,
@@ -326,13 +384,21 @@ export default async function inspectionRoutes(app: FastifyInstance) {
       params.push(v);
       where.push(`i.inspection_date ${op} $${params.length}::date`);
     }
+    // Archived and deleted inspections are left out unless asked for: archived=only (just archived ones) or
+    // archived=include (live and archived). Deleted ones are only listed under Admin → Deleted.
+    const st = "COALESCE(st.state, 'active')";
+    if (qs.archived === "only") where.push(`${st} = 'archived'`);
+    else if (qs.archived === "include") where.push(`${st} IN ('active', 'archived')`);
+    else where.push(`${st} = 'active'`);
     params.push(limit);
     return q(
       `SELECT i.id, i.vehicle_id, v.truck_code, i.inspection_date, i.inspector_name, i.mileage, i.status, i.mileage_flagged,
+              ${st} AS state,
               (SELECT count(*) FROM inspection_items ii WHERE ii.inspection_id = i.id AND ii.result = 'repair') AS repair_count,
               (SELECT count(*) FROM inspection_items ii
                 WHERE ii.inspection_id = i.id AND ii.result = 'repair' AND ii.resolved_at IS NULL) AS open_repair_count
          FROM inspections i JOIN vehicles v ON v.id = i.vehicle_id
+         LEFT JOIN inspection_states st ON st.inspection_id = i.id
         ${where.length ? "WHERE " + where.join(" AND ") : ""}
         ORDER BY i.created_at DESC LIMIT $${params.length}`,
       params,
@@ -350,10 +416,13 @@ export default async function inspectionRoutes(app: FastifyInstance) {
     requireUser(req);
     const data = await loadInspection(uuidParam(req.params));
     if (!data) throw notFound("Inspection not found.");
-    const { inspection: i, items, damage, photos, truckDiagram, trailerDiagram } = data;
+    const { inspection: i, state, stateInfo, stateHistory, items, damage, photos, truckDiagram, trailerDiagram } = data;
     return {
       id: i.id,
       status: i.status,
+      state,
+      state_info: stateInfo,
+      state_history: stateHistory,
       vehicle: {
         id: i.vehicle_id, truck_code: i.truck_code, unit: i.unit, vin: i.vin, plate: i.plate,
         year: i.year, make: i.make, model: i.model,
@@ -409,17 +478,46 @@ export default async function inspectionRoutes(app: FastifyInstance) {
     const r = await one(
       `UPDATE inspections SET status = 'reviewed', supervisor_user_id = $2, supervisor_name = $3,
               supervisor_signature_path = $4, supervisor_signed_at = now(), supervisor_note = $5
-        WHERE id = $1 AND status = 'submitted' RETURNING id`,
+        WHERE id = $1 AND status = 'submitted'
+          AND NOT EXISTS (SELECT 1 FROM inspection_states s WHERE s.inspection_id = $1 AND s.state = 'deleted')
+        RETURNING id`,
       [id, user.id, name, key, note],
     );
     if (!r) {
       await files.remove(key).catch(() => {});
-      const exists = await one(`SELECT status FROM inspections WHERE id = $1`, [id]);
+      const exists = await one(
+        `SELECT i.status, s.state FROM inspections i LEFT JOIN inspection_states s ON s.inspection_id = i.id WHERE i.id = $1`, [id]);
       if (!exists) throw notFound("Inspection not found.");
+      if (exists.state === "deleted") throw conflict(ALREADY.deleted);
       throw conflict("This inspection was already signed off.");
     }
     return { ok: true };
   });
+
+  // Archive (supervisor+) and delete (admin) never erase anything; see changeInspectionState.
+  const reasonOf = (body: unknown, required: boolean) => {
+    const b = obj(body ?? {});
+    return required ? reqStr(b.reason, "Reason", 500) : str(b.reason, "Reason", 500);
+  };
+  app.post("/inspections/:id/archive", { preHandler: requireRole("supervisor") }, async (req) =>
+    changeInspectionState(uuidParam(req.params), "archive", req.user!.id, reasonOf(req.body, false)));
+  app.post("/inspections/:id/unarchive", { preHandler: requireRole("supervisor") }, async (req) =>
+    changeInspectionState(uuidParam(req.params), "unarchive", req.user!.id, null));
+  app.post("/inspections/:id/delete", { preHandler: requireRole("admin") }, async (req) =>
+    changeInspectionState(uuidParam(req.params), "delete", req.user!.id, reasonOf(req.body, true)));
+  app.post("/inspections/:id/restore", { preHandler: requireRole("admin") }, async (req) =>
+    changeInspectionState(uuidParam(req.params), "restore", req.user!.id, null));
+
+  // Admin → Deleted: everything deleted, newest first, ready to restore.
+  app.get("/admin/deleted-inspections", { preHandler: requireRole("admin") }, async () =>
+    q(`SELECT i.id, i.vehicle_id, v.truck_code, i.inspection_date, i.inspector_name, i.mileage, i.status,
+              s.reason, s.changed_at AS deleted_at, u.name AS deleted_by_name
+         FROM inspection_states s
+         JOIN inspections i ON i.id = s.inspection_id
+         JOIN vehicles v ON v.id = i.vehicle_id
+         JOIN users u ON u.id = s.changed_by
+        WHERE s.state = 'deleted'
+        ORDER BY s.changed_at DESC LIMIT 500`));
 
   app.post("/inspection-items/:id/resolve", { preHandler: requireRole("supervisor", "shop") }, async (req) => {
     const id = idParam(req.params);

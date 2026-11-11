@@ -72,6 +72,8 @@ Tunnel, which needs a domain on Tyler's Cloudflare account.
    - Sticky bottom bar with progress (N of M items) and Save. Save is blocked until required fields are done, and the missing items are listed and highlighted.
    - Drafts autosave on the device (IndexedDB) and survive closing the browser
 5. **Inspection detail:** everything submitted, repairs listed first, damage diagram with pins, photo gallery with full-screen view, full checklist, signatures. Supervisor sign-off happens here (name + finger signature). **Export PDF** button.
+   **Archive or delete** card (§9): Archive / Un-archive (supervisor+), Delete / Restore (admin), with the history of each change;
+   an archived or deleted inspection shows a banner saying so.
 6. **Repairs board** (supervisor): all open repair items across the fleet, filterable by truck. Mark resolved with a note, optionally linked to a service log entry.
 6a. **Maintenance log** (shop, admin; supervisors can read): on the truck page, "Next due" (from the newest entry of each type,
    orange within 500 miles or 14 days, red when due), the list of entries, and "+ Log maintenance". The entry form has date,
@@ -97,6 +99,8 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - The phone keeps a draft until the server confirms it; submits are idempotent; uploads retry.
 - Files are written to a temp file, flushed to disk and renamed, so a crash never leaves a half-written photo.
 - Schema changes only add numbered migrations, each in one transaction.
+- The database refuses to delete inspections, their checklist answers and damage marks, and any photo once it's attached
+  (005). "Delete" in the app only marks an inspection deleted; it stays restorable for good, with every change kept as history.
 - Nightly backups (database + uploads) to a second location, and a restore is tested (done 2026-11-11 on Tyler's PC: restored
   data matched the backup row for row and file for file). A backup is written to a temp file and renamed only when complete,
   never overwrites an existing backup, and runs one at a time. A restore first saves the current data as a `_before-restore`
@@ -150,7 +154,10 @@ GET  /vehicles/:id        -> vehicle + open repairs + history + damage on file (
 GET  /vehicles/:id/last   -> last inspection (to prefill notes) + all damage on file that fits today's picture (grey pins)
 POST /photos              multipart -> {id}   (before submit; orphan cleanup after 7 days)
 POST /inspections         {client_id, ..., items[], damage[], photo_ids[]}
-GET  /inspections?limit&status&vehicle_id&from&to   (from/to: inclusive inspection dates, YYYY-MM-DD)
+GET  /inspections?limit&status&vehicle_id&from&to&archived   (from/to: inclusive dates; archived=only|include, else live only)
+POST /inspections/:id/archive {reason?} · /unarchive          supervisor+
+POST /inspections/:id/delete {reason} · /restore             admin
+GET  /admin/deleted-inspections                               admin
 GET  /inspections/:id
 POST /inspections/:id/review     {signature (png)}        supervisor+
 POST /inspection-items/:id/resolve {note}                 supervisor+
@@ -205,7 +212,7 @@ POST /service-logs/:id/void         {reason}                                    
        when, who and the maintenance entry; nothing is deleted. Voiding that maintenance entry puts the damage back on file.
      - Data: an additive migration with a separate repairs record per mark (damage marks stay read-only, like inspections).
      - Feeds the lease-return checklist's "damage repaired" step in fleet management.
-   - **Archive or delete inspections (requested 2026-11-11, not started):** for mistakes (wrong truck, a duplicate, a test)
+   - **Archive or delete inspections (built 2026-11-11, migration 005):** for mistakes (wrong truck, a duplicate, a test)
      and for clearing old ones out of the lists. It has to fit §4a ("nothing is hard-deleted from the app"), so proposed:
      - **Archive** (supervisor+): hides the inspection from home, truck history, the export list and sign-off lists. Still
        opens from a link or an "Archived" filter, still exports to PDF, and can be un-archived.

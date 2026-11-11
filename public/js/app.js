@@ -23,7 +23,7 @@ const routes = [
   { re: /^#\/service\/(new|edit)\/(\d+)(?:\?fix=(\d+))?$/, view: serviceForm, allow: () => can.logService() },
   { re: /^#\/service\/(\d+)$/, view: serviceDetail, allow: () => can.seeService() },
   { re: /^#\/export(?:\?truck=(\d+))?$/, view: exportView, role: "supervisor" },
-  { re: /^#\/admin(?:\/(users|trucks|branding))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
+  { re: /^#\/admin(?:\/(users|trucks|branding|deleted))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
 
 let current = null;
@@ -91,7 +91,7 @@ export function openMenu() {
   const m = modal(`<h3>${esc(u.name)}</h3><p class="muted small" style="margin-top:-8px">Signed in as ${esc(u.role)}</p>
     <div style="display:grid;gap:10px">
       ${atLeast("supervisor") ? `<a class="secondary" href="#/export" data-close>Export PDFs</a>` : ""}
-      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks &amp; branding</a>` : ""}
+      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks, branding &amp; deleted</a>` : ""}
       <button class="secondary danger" id="mSignOut">Sign out</button>
       <button class="secondary" data-close>Close</button>
     </div>`);

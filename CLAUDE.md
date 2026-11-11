@@ -35,6 +35,9 @@ npm run user -- add --name "X" --role crew --pin 1234
 - Phone-first. Test every screen at 390×844 (iPhone) and 820×1180 (iPad). Touch targets at least 44px. Numeric keypad for mileage.
 - Expect bad cell signal. Drafts live on the device, uploads retry, and submits are idempotent via `client_id`.
 - Submitted inspections are read-only (enforced by database triggers); corrections go in the supervisor note.
+  They can't be deleted either: archive/delete lives in `inspection_states` (migration 005). Anything that means "counts for the
+  truck" (open repairs, damage on file, last inspection, mileage, lists) reads `live_inspections`, not `inspections`; a
+  migration that adds an inspections column must recreate that view if it's needed there.
 - Every state-changing `/api` call needs the `x-gc-app: 1` header (CSRF guard); `public/js/api.js` adds it.
 - Everything runs with `docker compose up -d` on Ubuntu. Secrets go in `.env` (never committed); ship a `.env.example`.
   Local dev settings go in `.env.local` (also gitignored), so they never collide with the server's `.env`.

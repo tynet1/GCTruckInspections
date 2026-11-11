@@ -63,14 +63,14 @@ export async function damageHistory(vehicleId: number, current: { diagram_id: nu
     `SELECT dm.id, dm.diagram, dm.seq, dm.x, dm.y, dm.note, i.id AS inspection_id, i.inspection_date,
             i.trailer_number_text AS trailer_number,
             CASE WHEN dm.diagram = 'truck' THEN i.truck_diagram_id ELSE i.trailer_diagram_id END AS drawn_on
-       FROM damage_marks dm JOIN inspections i ON i.id = dm.inspection_id
+       FROM damage_marks dm JOIN live_inspections i ON i.id = dm.inspection_id
       WHERE i.vehicle_id = $1
       ORDER BY i.inspection_date, i.created_at, dm.seq`,
     [vehicleId],
   );
   const photos = await q(
     `SELECT p.id, p.caption, p.damage_mark_id
-       FROM photos p JOIN damage_marks dm ON dm.id = p.damage_mark_id JOIN inspections i ON i.id = dm.inspection_id
+       FROM photos p JOIN damage_marks dm ON dm.id = p.damage_mark_id JOIN live_inspections i ON i.id = dm.inspection_id
       WHERE i.vehicle_id = $1 ORDER BY p.created_at, p.id`,
     [vehicleId],
   );
@@ -99,7 +99,7 @@ export default async function vehicleRoutes(app: FastifyInstance) {
     if (!vehicle) throw notFound("Truck not found.");
     const openRepairs = await q(
       `SELECT ii.id, ii.section, ii.label_snapshot AS label, ii.note, i.id AS inspection_id, i.inspection_date
-         FROM inspection_items ii JOIN inspections i ON i.id = ii.inspection_id
+         FROM inspection_items ii JOIN live_inspections i ON i.id = ii.inspection_id
         WHERE i.vehicle_id = $1 AND ii.result = 'repair' AND ii.resolved_at IS NULL
         ORDER BY i.inspection_date DESC, i.created_at DESC, ii.section, ii.id`,
       [id],
@@ -110,21 +110,27 @@ export default async function vehicleRoutes(app: FastifyInstance) {
               (SELECT count(*) FROM inspection_items ii
                 WHERE ii.inspection_id = i.id AND ii.result = 'repair' AND ii.resolved_at IS NULL) AS open_repair_count,
               (SELECT count(*) FROM damage_marks dm WHERE dm.inspection_id = i.id) AS damage_count
-         FROM inspections i WHERE i.vehicle_id = $1
+         FROM live_inspections i WHERE i.vehicle_id = $1
         ORDER BY i.inspection_date DESC, i.created_at DESC LIMIT 200`,
       [id],
     );
+    const archived = await one<{ n: number }>(
+      `SELECT count(*) AS n FROM inspection_states s JOIN inspections i ON i.id = s.inspection_id
+        WHERE i.vehicle_id = $1 AND s.state = 'archived'`,
+      [id],
+    );
     const damage = await damageHistory(id, vehicle);
-    return { vehicle, openRepairs, history, damage };
+    return { vehicle, openRepairs, history, archived_count: archived?.n ?? 0, damage };
   });
 
   // Previous inspection prefills the notes; all damage on file shows as grey dots on the new form.
+  // Archived and deleted inspections don't count for either.
   app.get("/vehicles/:id/last", async (req) => {
     const id = idParam(req.params);
     const last = await one(
       `SELECT id, inspection_date, existing_notes, new_observations, mileage,
               trailer_inspected, trailer_number_text, trailer_plate_text
-         FROM inspections WHERE vehicle_id = $1
+         FROM live_inspections WHERE vehicle_id = $1
         ORDER BY inspection_date DESC, created_at DESC LIMIT 1`,
       [id],
     );

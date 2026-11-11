@@ -37,7 +37,7 @@ export async function render(app, truckId) {
   nav = state.nav;
   selected = new Map();
   rows = [];
-  filters = { truck: truckId || "", from: "", to: "", range: "" };
+  filters = { truck: truckId || "", from: "", to: "", range: "", archived: false };
   setHeader({ title: "Export PDFs", back: truckId ? `#/truck/${truckId}` : "#/" });
   app.innerHTML = `<div class="empty">Loading…</div>`;
   const vehicles = await api("/vehicles").catch(() => []);
@@ -55,6 +55,7 @@ export async function render(app, truckId) {
       </div>
       <div class="chips" id="x-ranges" style="margin-top:12px">${RANGES.map(([k, l]) =>
         `<button type="button" data-range="${k}">${l}</button>`).join("")}</div>
+      <label class="pick" style="border:0;margin-top:6px"><input type="checkbox" id="x-arch"><span>Include archived inspections</span></label>
     </div>
     <div class="h2row"><h2 id="x-count">Inspections</h2>
       <span class="row" style="flex-wrap:nowrap"><button class="link" id="x-all">Select all</button><button class="link" id="x-none">Clear</button></span></div>
@@ -68,6 +69,7 @@ export async function render(app, truckId) {
 
 function wire() {
   $("#x-truck").onchange = (e) => { filters.truck = e.target.value; load(); };
+  $("#x-arch").onchange = (e) => { filters.archived = e.target.checked; load(); };
   for (const key of ["from", "to"]) {
     $(`#x-${key}`).onchange = (e) => {
       filters[key] = e.target.value;
@@ -120,6 +122,7 @@ async function load() {
   if (filters.truck) p.set("vehicle_id", filters.truck);
   if (filters.from) p.set("from", filters.from);
   if (filters.to) p.set("to", filters.to);
+  if (filters.archived) p.set("archived", "include");
   $("#x-list").innerHTML = `<div class="empty">Loading…</div>`;
   let res;
   try {

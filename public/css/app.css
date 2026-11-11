@@ -192,6 +192,9 @@ body.has-bar .netbar{bottom:calc(69px + env(safe-area-inset-bottom))}
 .list .item .grow{flex:1;min-width:0}
 .clip{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .list .item.voided{opacity:.6}
+/* Archive / delete */
+.statehist{margin:12px 0 0;padding:10px 0 0 18px;border-top:1px solid var(--line);font-size:14px;color:var(--muted)}
+.statehist li{margin:2px 0}
 /* Export PDFs */
 .h2row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:22px 4px 8px}
 .h2row h2{margin:0}

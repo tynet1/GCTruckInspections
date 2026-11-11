@@ -62,7 +62,7 @@ export function inspectionPills(i) {
   const status = open
     ? `<span class="pill bad">${open} open repair${open > 1 ? "s" : ""}</span>`
     : n ? `<span class="pill okk">✓ Repairs fixed</span>` : `<span class="pill okk">All OK</span>`;
-  return `${status}
+  return `${i.state === "archived" ? `<span class="pill grey">Archived</span>` : ""}${status}
       ${i.mileage_flagged ? `<span class="pill warn">Mileage?</span>` : ""}
       ${i.status === "reviewed" ? "" : `<span class="pill grey">Unreviewed</span>`}`;
 }

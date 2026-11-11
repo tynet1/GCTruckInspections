@@ -138,7 +138,8 @@ async function attachRepairs(c: PoolClient, entryId: number, vehicleId: number, 
   if (!ids.length) return;
   const rows = (await c.query(
     `SELECT ii.id, ii.result, ii.resolved_at, i.vehicle_id,
-            EXISTS (SELECT 1 FROM service_log_repairs r WHERE r.inspection_item_id = ii.id AND r.active) AS linked
+            EXISTS (SELECT 1 FROM service_log_repairs r WHERE r.inspection_item_id = ii.id AND r.active) AS linked,
+            EXISTS (SELECT 1 FROM inspection_states s WHERE s.inspection_id = i.id AND s.state <> 'active') AS hidden
        FROM inspection_items ii JOIN inspections i ON i.id = ii.inspection_id
       WHERE ii.id = ANY($1::int[])
       FOR UPDATE OF ii`,
@@ -146,7 +147,8 @@ async function attachRepairs(c: PoolClient, entryId: number, vehicleId: number, 
   )).rows;
   const wrong = ids.filter((id) => {
     const r = rows.find((x) => x.id === id);
-    return !r || r.result !== "repair" || r.vehicle_id !== vehicleId;
+    // Repairs on an archived or deleted inspection are off the truck, so they can't be fixed through the log either.
+    return !r || r.result !== "repair" || r.vehicle_id !== vehicleId || r.hidden;
   });
   if (wrong.length) {
     throw new HttpError(422, "Some of the repairs picked aren't repairs on this truck. Reload and pick again.", { code: "bad_repairs", items: wrong });
@@ -314,7 +316,7 @@ export default async function serviceRoutes(app: FastifyInstance) {
     );
     const current = await one<{ miles: number | null }>(
       `SELECT GREATEST(
-         (SELECT max(mileage) FROM inspections WHERE vehicle_id = $1),
+         (SELECT max(mileage) FROM live_inspections WHERE vehicle_id = $1),
          (SELECT max(mileage) FROM service_logs WHERE vehicle_id = $1 AND voided_at IS NULL)) AS miles`,
       [vid],
     );

@@ -2,7 +2,7 @@
 import { api } from "../api.js";
 import { setupSig } from "../sig.js";
 import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
-import { $, esc, fmtDate, fmtNum, lightbox, toast, vehicleInfo } from "../util.js";
+import { $, esc, fmtDate, fmtNum, lightbox, modal, toast, vehicleInfo } from "../util.js";
 import { repairButtons, resolveRepair, SECTION_TITLES } from "./common.js";
 
 let sigPad = null;
@@ -12,6 +12,84 @@ export function leave() {
   sigPad = null;
   const app = $("#app");
   app.onclick = null;
+}
+
+const ACTION_PAST = { archive: "Archived", unarchive: "Un-archived", delete: "Deleted", restore: "Restored" };
+
+/** "Archive or delete" card: the buttons this user may use, plus every archive/delete/restore so far. */
+function stateSection(i) {
+  const isAdmin = atLeast("admin");
+  const b = [];
+  if (atLeast("supervisor")) {
+    if (i.state === "active") b.push(`<button class="secondary" data-state="archive">Archive</button>`);
+    if (i.state === "archived") b.push(`<button class="secondary" data-state="unarchive">Un-archive</button>`);
+  }
+  if (isAdmin && i.state !== "deleted") b.push(`<button class="secondary danger" data-state="delete">Delete</button>`);
+  if (isAdmin && i.state === "deleted") b.push(`<button class="secondary" data-state="restore">Restore</button>`);
+  const hist = i.state_history || [];
+  if (!b.length && !hist.length) return "";
+  return `<h2>Archive or delete</h2><div class="card">
+    ${b.length ? `<div class="row">${b.join("")}</div>` : ""}
+    ${i.state === "active" && b.length ? `<p class="small muted" style="margin:10px 0 0">Archive hides it from the lists and takes its repairs and damage off the truck; un-archive brings them back.${
+      isAdmin ? " Delete is for inspections that should never have existed; it can be restored from Admin → Deleted." : ""}</p>` : ""}
+    ${hist.length ? `<ul class="statehist">${hist.map((x) => `<li>${ACTION_PAST[x.action] || esc(x.action)} ${fmtDate(x.changed_at)} by ${esc(x.changed_by_name)}${
+      x.reason ? `: ${esc(x.reason)}` : ""}</li>`).join("")}</ul>` : ""}</div>`;
+}
+
+/** Ask, then archive / un-archive / delete / restore. Resolves true once saved. */
+function changeState(i, action) {
+  const truck = i.vehicle.truck_code;
+  const open = i.items.filter((it) => it.result === "repair" && !it.resolved_at).length;
+  const marks = i.damage.length;
+  const parts = [open ? `${open} open repair${open > 1 ? "s" : ""}` : "", marks ? `${marks} damage mark${marks > 1 ? "s" : ""}` : ""].filter(Boolean);
+  const what = parts.join(" and ");
+  const cfg = {
+    archive: {
+      title: "Archive this inspection?",
+      body: `It's hidden from the lists but kept, and you can un-archive it any time.${what ? ` <b>${what} will come off ${esc(truck)}'s page</b> until then.` : ""}`,
+      reason: "Why? (optional)", required: false, ok: "Archive",
+    },
+    unarchive: {
+      title: "Un-archive this inspection?",
+      body: `It goes back in the lists${what ? `, and its ${what} come back on ${esc(truck)}'s page` : ""}.`, ok: "Un-archive",
+    },
+    delete: {
+      title: "Delete this inspection?",
+      body: `For inspections that should never have existed (wrong truck, a duplicate, a test). Nothing is erased: it moves to
+        Admin → Deleted and can be restored there.${what ? ` <b>${what} will come off ${esc(truck)}'s page.</b>` : ""}`,
+      reason: "Why is it being deleted?", required: true, ok: "Delete", danger: true,
+    },
+    restore: {
+      title: "Restore this inspection?",
+      body: `It goes back in the lists${what ? `, and its ${what} come back on ${esc(truck)}'s page` : ""}.`, ok: "Restore",
+    },
+  }[action];
+  return new Promise((resolve) => {
+    const m = modal(`<h3>${cfg.title}</h3><p style="margin-top:-6px">${cfg.body}</p>
+      ${cfg.reason ? `<label class="f" for="stReason">${cfg.reason}</label><textarea class="t" id="stReason" maxlength="500"></textarea>` : ""}
+      <div id="stErr"></div>
+      <div class="row" style="justify-content:flex-end;margin-top:14px">
+        <button class="secondary" data-c>Cancel</button>
+        <button class="primary${cfg.danger ? " btn-danger" : ""}" data-y>${cfg.ok}</button></div>`);
+    m.querySelector("[data-c]").onclick = () => { m.remove(); resolve(false); };
+    m.querySelector("[data-y]").onclick = async (e) => {
+      const reason = m.querySelector("#stReason")?.value.trim() || "";
+      if (cfg.required && !reason) {
+        m.querySelector("#stErr").innerHTML = `<div class="banner err">Add a short reason.</div>`;
+        return;
+      }
+      e.target.disabled = true;
+      try {
+        await api(`/inspections/${i.id}/${action}`, { method: "POST", body: reason ? { reason } : {} });
+        m.remove();
+        toast(`${ACTION_PAST[action]} ✓`);
+        resolve(true);
+      } catch (err) {
+        e.target.disabled = false;
+        m.querySelector("#stErr").innerHTML = `<div class="banner err">${esc(err.message)}</div>`;
+      }
+    };
+  });
 }
 
 export async function render(app, id) {
@@ -46,7 +124,16 @@ export async function render(app, id) {
     : "";
 
   const repairs = i.items.filter((it) => it.result === "repair");
+  const live = i.state === "active";
+  const si = i.state_info;
   let h = "";
+  if (i.state === "archived") {
+    h += `<div class="banner info"><b>Archived</b> ${fmtDate(si?.changed_at)}${si?.changed_by_name ? ` by ${esc(si.changed_by_name)}` : ""}${si?.reason ? `: ${esc(si.reason)}` : ""}.
+      It's hidden from the lists, and its repairs and damage are off ${esc(v.truck_code)}'s page. It still exports to PDF.</div>`;
+  } else if (i.state === "deleted") {
+    h += `<div class="banner err"><b>Deleted</b> ${fmtDate(si?.changed_at)}${si?.changed_by_name ? ` by ${esc(si.changed_by_name)}` : ""}${si?.reason ? `: ${esc(si.reason)}` : ""}.
+      Nothing was erased: it's listed under Admin → Deleted and can be restored there.</div>`;
+  }
   if (i.mileage_flagged) {
     h += `<div class="banner info"><b>Mileage check:</b> ${fmtNum(i.mileage)} is lower than the previous ${fmtNum(i.previous_mileage)}.
       Check with the inspector; put any correction in the supervisor note.</div>`;
@@ -71,7 +158,7 @@ export async function render(app, id) {
             can.seeService() ? ` · <a href="#/service/${esc(r.service_log_id)}">See maintenance entry</a>` : " (maintenance log)"}</div>`
           : `<div class="small" style="color:var(--ok)">✓ Resolved ${fmtDate(r.resolved_at)}${r.resolved_by_name ? ` by ${esc(r.resolved_by_name)}` : ""}: ${esc(r.resolution_note)}</div>`) : ""}
         ${thumbs(i.photos.filter((p) => p.inspection_item_id === r.id))}</div>
-        ${r.resolved_at ? "" : repairButtons(r, v.id, { canLog: can.logService(), canResolve: isSup })}</div></li>`).join("")}</ul>`
+        ${r.resolved_at || !live ? "" : repairButtons(r, v.id, { canLog: can.logService(), canResolve: isSup })}</div></li>`).join("")}</ul>`
     : `<span class="muted">Everything marked OK.</span>`}</div>`;
 
   const dia = (url, list) => `<div class="diagram ro"><img src="${esc(url)}" alt="">${list.map((m) => `<span class="pin" style="left:${m.x * 100}%;top:${m.y * 100}%">${m.seq}</span>`).join("")}</div>
@@ -108,7 +195,7 @@ export async function render(app, id) {
     h += `<img class="sigimg" src="${esc(i.supervisor.signature_url)}" alt="Supervisor signature">
       <div class="small">${esc(i.supervisor.name)} · ${fmtDate(i.supervisor.signed_at)}</div>
       ${i.supervisor.note ? `<div style="margin-top:8px"><b>Supervisor note:</b> <span style="white-space:pre-wrap">${esc(i.supervisor.note)}</span></div>` : ""}`;
-  } else if (isSup) {
+  } else if (isSup && i.state !== "deleted") {
     h += `<div style="margin-top:6px">
       <label class="f" for="supName">Supervisor name</label><input class="t" id="supName" value="${esc(state.user.name)}">
       <label class="f" for="supNote" style="margin-top:10px">Note (optional; corrections go here)</label><textarea class="t" id="supNote"></textarea>
@@ -119,6 +206,7 @@ export async function render(app, id) {
     h += `<span class="pill grey">Awaiting supervisor review</span>`;
   }
   h += `</div>`;
+  h += stateSection(i);
   app.innerHTML = h;
 
   app.onclick = async (e) => {
@@ -130,6 +218,8 @@ export async function render(app, id) {
     }
     const rs = e.target.closest("[data-resolve]");
     if (rs && (await resolveRepair(rs.dataset.resolve, rs.dataset.label)) && !stale(nav)) render(app, id);
+    const act = e.target.closest("[data-state]");
+    if (act && (await changeState(i, act.dataset.state)) && !stale(nav)) render(app, id);
   };
 
   if ($("#supsig")) {

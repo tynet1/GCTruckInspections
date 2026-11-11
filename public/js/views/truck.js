@@ -66,7 +66,8 @@ export async function render(app, id) {
     ? `<div class="h2row"><h2>Inspection history</h2><a class="link" href="#/export?truck=${v.id}">Export PDFs</a></div>`
     : `<h2>Inspection history</h2>`}<div class="card list">${history.length
     ? history.map((i) => inspectionRow(i, { showTruck: false })).join("")
-    : `<div class="empty">No inspections yet.</div>`}</div>`;
+    : `<div class="empty">No inspections yet.</div>`}
+    ${data.archived_count ? `<div id="archivedBox"><button class="link" id="showArchived" style="width:100%">Show ${data.archived_count} archived</button></div>` : ""}</div>`;
   app.innerHTML = h;
 
   const sn = $("#sendNow");
@@ -91,6 +92,19 @@ export async function render(app, id) {
   }));
   const ma = $("#svcMore");
   if (ma) ma.onclick = () => { showAllService = true; render(app, id); };
+  const sa = $("#showArchived");
+  if (sa) sa.onclick = async () => {
+    sa.disabled = true;
+    sa.innerHTML = `<span class="spinner"></span>`;
+    try {
+      const list = await api(`/inspections?vehicle_id=${v.id}&archived=only&limit=200`);
+      if (stale(nav)) return;
+      $("#archivedBox").innerHTML = `<div class="small muted" style="padding:10px 2px 0">Archived: kept, but their repairs and damage are off this page.</div>
+        ${list.map((i) => inspectionRow(i, { showTruck: false })).join("")}`;
+    } catch (e) {
+      if (!stale(nav)) $("#archivedBox").innerHTML = errorHtml(e);
+    }
+  };
   const dm = $("#dmgMore");
   if (dm) dm.onclick = () => { showAllDamage = true; render(app, id); };
   app.querySelectorAll("[data-lb]").forEach((img) => (img.onclick = () => lightbox(img.src, img.dataset.cap)));

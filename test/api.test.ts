@@ -676,4 +676,128 @@ if (!url) {
       assert.equal(left.length, 1);
     });
   });
+
+  describe("archive and delete inspections", () => {
+    let adminCookie = "";
+    let truckId = 0;
+    let older = "";
+    let newer = "";
+    let newerRepairId = 0;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const page = async (): Promise<any> => (await inject("GET", `/vehicles/${truckId}`, { cookie: supCookie })).json();
+    const ids = (rows: { id: string }[]) => rows.map((r) => r.id);
+
+    before(async () => {
+      adminCookie = cookieOf(await inject("POST", "/auth/login", { body: { email: "admin@test.local", password: "admin-password-1" } }));
+      const t = await one(`SELECT id FROM vehicles WHERE truck_code NOT IN ('AZ018', 'AZ002') ORDER BY id LIMIT 1`);
+      truckId = t.id;
+      const submit = async (date: string, mileage: number, note: string, x: number) => {
+        const body = submitBody({
+          vehicle_id: truckId, inspection_date: date, mileage, existing_notes: note,
+          damage: [{ key: "k", diagram: "truck", x, y: 0.5, note: `Dent ${date}` }],
+        });
+        body.items = (body.items as { checklist_item_id: number; result: string; note?: string }[]).map((it, n) =>
+          n === 2 ? { ...it, result: "repair", note: `Repair ${date}` } : it);
+        const res = await inject("POST", "/inspections", { cookie: crewCookie, body });
+        assert.equal(res.statusCode, 201, res.body);
+        return res.json().id as string;
+      };
+      older = await submit("2026-08-01", 40000, "Older notes", 0.2);
+      newer = await submit("2026-08-15", 90000, "Newer notes (wrong truck)", 0.7);
+      newerRepairId = (await one(`SELECT id FROM inspection_items WHERE inspection_id = $1 AND result = 'repair'`, [newer])).id;
+    });
+
+    test("who can do what", async () => {
+      assert.equal((await inject("POST", `/inspections/${newer}/archive`, { cookie: crewCookie, body: {} })).statusCode, 403);
+      assert.equal((await inject("POST", `/inspections/${newer}/delete`, { cookie: supCookie, body: { reason: "x" } })).statusCode, 403);
+      assert.equal((await inject("POST", `/inspections/${newer}/delete`, { cookie: adminCookie, body: {} })).statusCode, 400, "delete needs a reason");
+      assert.equal((await inject("GET", "/admin/deleted-inspections", { cookie: supCookie })).statusCode, 403);
+      assert.equal((await inject("POST", `/inspections/${newer}/unarchive`, { cookie: supCookie, body: {} })).statusCode, 409, "not archived");
+    });
+
+    test("archiving takes it out of the lists and its repairs, damage and mileage off the truck; un-archiving brings them back", async () => {
+      const before = await page();
+      assert.equal(before.vehicle.last_inspection_date, "2026-08-15");
+      assert.equal(before.openRepairs.length, 2);
+      assert.equal(before.damage.length, 2);
+
+      const res = await inject("POST", `/inspections/${newer}/archive`, { cookie: supCookie, body: { reason: "Old" } });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.equal((await inject("POST", `/inspections/${newer}/archive`, { cookie: supCookie, body: {} })).statusCode, 409);
+
+      const p = await page();
+      assert.deepEqual(ids(p.history), [older]);
+      assert.equal(p.archived_count, 1);
+      assert.equal(p.openRepairs.length, 1);
+      assert.equal(p.vehicle.open_repairs, 1);
+      assert.deepEqual(p.damage.map((m: { inspection_id: string }) => m.inspection_id), [older]);
+      assert.equal(p.vehicle.last_inspection_date, "2026-08-01");
+      assert.equal(p.vehicle.last_mileage, 40000);
+      const last = (await inject("GET", `/vehicles/${truckId}/last`, { cookie: crewCookie })).json();
+      assert.equal(last.inspection.existing_notes, "Older notes");
+
+      const list = async (qs: string) => ids((await inject("GET", `/inspections?limit=200&vehicle_id=${truckId}${qs}`, { cookie: supCookie })).json());
+      assert.deepEqual(await list(""), [older]);
+      assert.deepEqual(await list("&archived=only"), [newer]);
+      assert.deepEqual((await list("&archived=include")).sort(), [older, newer].sort());
+
+      const d = (await inject("GET", `/inspections/${newer}`, { cookie: crewCookie })).json();
+      assert.equal(d.state, "archived");
+      assert.equal(d.state_info.reason, "Old");
+      assert.equal(d.state_info.changed_by_name, "Sam Super");
+      assert.equal((await inject("GET", `/inspections/${newer}/pdf`, { cookie: supCookie })).statusCode, 200, "still exports");
+
+      // Its repair is off the truck, so it can't be closed through the maintenance log either.
+      const fix = await inject("POST", "/service-logs", {
+        cookie: adminCookie,
+        body: { client_id: randomUUID(), vehicle_id: truckId, service_date: "2026-08-20", mileage: 41000, category: "repair", description: "x", repair_item_ids: [newerRepairId] },
+      });
+      assert.equal(fix.statusCode, 422, fix.body);
+      assert.equal(fix.json().details.code, "bad_repairs");
+
+      assert.equal((await inject("POST", `/inspections/${newer}/unarchive`, { cookie: supCookie, body: {} })).statusCode, 200);
+      const back = await page();
+      assert.equal(back.openRepairs.length, 2);
+      assert.equal(back.damage.length, 2);
+      assert.equal(back.vehicle.last_mileage, 90000);
+      assert.equal(back.archived_count, 0);
+    });
+
+    test("delete (admin) moves it to Admin → Deleted; restore brings it back; the history keeps every step", async () => {
+      const del = await inject("POST", `/inspections/${newer}/delete`, { cookie: adminCookie, body: { reason: "Wrong truck" } });
+      assert.equal(del.statusCode, 200, del.body);
+      const p = await page();
+      assert.deepEqual(ids(p.history), [older]);
+      assert.equal(p.archived_count, 0, "deleted isn't counted as archived");
+      const all = ids((await inject("GET", `/inspections?limit=200&vehicle_id=${truckId}&archived=include`, { cookie: supCookie })).json());
+      assert.deepEqual(all, [older], "deleted never shows in the normal lists");
+      const bin = (await inject("GET", "/admin/deleted-inspections", { cookie: adminCookie })).json();
+      assert.equal(bin.length, 1);
+      assert.equal(bin[0].id, newer);
+      assert.equal(bin[0].reason, "Wrong truck");
+
+      const sig = await inject("POST", `/inspections/${newer}/review`, { cookie: supCookie, body: { signature: PNG } });
+      assert.equal(sig.statusCode, 409, "a deleted inspection can't be signed off");
+      assert.equal((await inject("POST", `/inspections/${newer}/archive`, { cookie: supCookie, body: {} })).statusCode, 409);
+
+      assert.equal((await inject("POST", `/inspections/${newer}/restore`, { cookie: adminCookie, body: {} })).statusCode, 200);
+      assert.equal((await inject("GET", "/admin/deleted-inspections", { cookie: adminCookie })).json().length, 0);
+      assert.equal((await page()).openRepairs.length, 2);
+      const d = (await inject("GET", `/inspections/${newer}`, { cookie: crewCookie })).json();
+      assert.equal(d.state, "active");
+      assert.deepEqual(d.state_history.map((h: { action: string }) => h.action), ["archive", "unarchive", "delete", "restore"]);
+    });
+
+    test("the database refuses to erase inspections, their records and attached photos", async () => {
+      await assert.rejects(q(`DELETE FROM inspections WHERE id = $1`, [older]), /can't be deleted/);
+      await assert.rejects(q(`DELETE FROM inspection_items WHERE inspection_id = $1`, [older]), /can't be deleted/);
+      await assert.rejects(q(`DELETE FROM damage_marks WHERE inspection_id = $1`, [older]), /can't be deleted/);
+      await assert.rejects(q(`DELETE FROM inspection_states WHERE inspection_id = $1`, [newer]), /can't be deleted/);
+      await assert.rejects(q(`UPDATE inspection_state_history SET reason = 'x' WHERE inspection_id = $1`, [newer]), /can't be updated/);
+      const attached = await one(`SELECT id FROM photos WHERE inspection_id IS NOT NULL LIMIT 1`);
+      await assert.rejects(q(`DELETE FROM photos WHERE id = $1`, [attached.id]), /can't be deleted once attached/);
+      const loose = await uploadPhoto(crewCookie);
+      await q(`DELETE FROM photos WHERE id = $1`, [loose.id]); // a never-attached upload can still be cleaned up
+    });
+  });
 }
