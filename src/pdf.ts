@@ -1,6 +1,8 @@
 import type { Browser } from "playwright";
 import { getBranding } from "./branding.ts";
 import { readDiagram } from "./diagrams.ts";
+import { maintenanceForInspection } from "./routes/service.ts";
+import type { MaintenanceEntry } from "./routes/service.ts";
 import { files } from "./storage.ts";
 
 type Data = NonNullable<Awaited<ReturnType<typeof import("./routes/inspections.ts").loadInspection>>>;
@@ -8,11 +10,19 @@ type Data = NonNullable<Awaited<ReturnType<typeof import("./routes/inspections.t
 const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-const fmtDate = (d: unknown) => {
+/**
+ * "2026-11-10" -> "11/10/2026". Timestamps (sign-off, fixed, logged) print as the date in the server's time zone
+ * (TZ, America/Phoenix in Docker), not UTC, so evening work doesn't show as the next day.
+ */
+export const fmtDate = (d: unknown) => {
   if (!d) return "";
-  const s = d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
-  const [y, m, day] = s.split("-");
-  return `${Number(m)}/${Number(day)}/${y}`;
+  if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const [y, m, day] = d.split("-");
+    return `${Number(m)}/${Number(day)}/${y}`;
+  }
+  const t = d instanceof Date ? d : new Date(String(d));
+  if (Number.isNaN(t.getTime())) return String(d);
+  return `${t.getMonth() + 1}/${t.getDate()}/${t.getFullYear()}`;
 };
 
 const CHECK = `<svg class="ck" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8" fill="none" stroke="#111" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
@@ -30,7 +40,9 @@ async function safeRead(key: string | null | undefined): Promise<Buffer | null> 
   }
 }
 
-function diagramBlock(src: string | null, marks: Data["damage"]) {
+const DIAGRAM_MAX_IN = 2.85;
+
+function diagramBlock(src: string | null, marks: Data["damage"], maxIn = DIAGRAM_MAX_IN) {
   if (!src) return `<div class="nodia">No diagram on file for this truck.</div>`;
   const pins = marks
     .map((m) => `<span class="pin" style="left:${(Number(m.x) * 100).toFixed(2)}%;top:${(Number(m.y) * 100).toFixed(2)}%">${m.seq}</span>`)
@@ -38,29 +50,52 @@ function diagramBlock(src: string | null, marks: Data["damage"]) {
   const legend = marks.length
     ? `<ol class="legend">${marks.map((m) => `<li value="${m.seq}">${esc(m.note || "(no description)")}</li>`).join("")}</ol>`
     : `<div class="legend none">No new damage marked.</div>`;
-  return `<div class="dia"><img src="${src}" alt="">${pins}</div>${legend}`;
+  return `<div class="dia"><img src="${src}" alt="" style="max-height:${maxIn.toFixed(2)}in">${pins}</div>${legend}`;
 }
 
 type Item = Data["items"][number];
 
-function itemCells(it: Item | undefined) {
+/** Maintenance entry number (as printed in the maintenance section) for each repair item it fixed. */
+type FixNumbers = Map<number, number>;
+
+/** The small line under a checklist item: the repair note, and how the repair was closed. */
+function itemSub(it: Item, fixNo: FixNumbers): string {
+  const parts: string[] = [];
+  if (it.result === "repair" && it.note) parts.push(`<span class="rnote">${esc(it.note)}</span>`);
+  if (it.resolved_at) {
+    parts.push(fixNo.has(it.id)
+      ? `<span class="resolved">✓ Fixed ${fmtDate(it.resolved_at)} (maintenance entry ${fixNo.get(it.id)})</span>`
+      : `<span class="resolved">✓ Resolved ${fmtDate(it.resolved_at)}${it.resolved_by_name ? ` by ${esc(it.resolved_by_name)}` : ""}: ${esc(it.resolution_note)}</span>`);
+  }
+  return parts.length ? `<div class="sub">${parts.join(" · ")}</div>` : "";
+}
+
+/** Rough number of printed lines a bit of HTML takes in a checklist column (about 52 characters a line). */
+const linesOf = (html: string) => (html ? Math.ceil(html.replace(/<[^>]+>/g, "").replace(/&\w+;|&#\d+;/g, "x").length / 52) : 0);
+
+function itemCells(it: Item | undefined, fixNo: FixNumbers) {
   if (!it) return `<td class="c"></td><td class="c"></td><td></td>`;
-  const note = it.result === "repair" && it.note ? `<div class="rnote">${esc(it.note)}</div>` : "";
-  const res = it.resolved_at
-    ? `<div class="resolved">Resolved ${fmtDate(it.resolved_at)}${it.resolved_by_name ? ` by ${esc(it.resolved_by_name)}` : ""}: ${esc(it.resolution_note)}</div>`
-    : "";
-  return `<td class="c">${it.result === "ok" ? CHECK : ""}</td><td class="c">${it.result === "repair" ? CHECK : ""}</td><td>${esc(it.label)}${note}${res}</td>`;
+  return `<td class="c">${it.result === "ok" ? CHECK : ""}</td><td class="c">${it.result === "repair" ? CHECK : ""}</td><td>${esc(it.label)}${itemSub(it, fixNo)}</td>`;
+}
+
+/** Extra lines the checklist rows need beyond one line each (a row is as tall as its taller side). */
+function checklistExtraLines(left: Item[], right: Item[], fixNo: FixNumbers) {
+  let n = 0;
+  for (let k = 0; k < Math.max(left.length, right.length); k++) {
+    n += Math.max(left[k] ? linesOf(itemSub(left[k], fixNo)) : 0, right[k] ? linesOf(itemSub(right[k], fixNo)) : 0);
+  }
+  return n;
 }
 
 /** Two side-by-side OK | Repair | Item column groups, like the paper form. */
-function checklistTable(left: Item[], right: Item[], leftTitle: string, rightTitle: string) {
+function checklistTable(left: Item[], right: Item[], leftTitle: string, rightTitle: string, fixNo: FixNumbers) {
   const n = Math.max(left.length, right.length);
   let rows = "";
-  for (let k = 0; k < n; k++) rows += `<tr>${itemCells(left[k])}${itemCells(right[k])}</tr>`;
+  for (let k = 0; k < n; k++) rows += `<tr>${itemCells(left[k], fixNo)}${itemCells(right[k], fixNo)}</tr>`;
   return `<table class="grid cl">
     <colgroup><col class="cw"><col class="cw"><col><col class="cw"><col class="cw"><col></colgroup>
-    <tr class="sh"><th>OK</th><th>Repair</th><th class="l">${esc(leftTitle)}</th><th>OK</th><th>Repair</th><th class="l">${esc(rightTitle)}</th></tr>
-    ${rows}</table>`;
+    <thead><tr class="sh"><th>OK</th><th>Repair</th><th class="l">${esc(leftTitle)}</th><th>OK</th><th>Repair</th><th class="l">${esc(rightTitle)}</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
 }
 
 export function buildInspectionHtml(d: Data, assets: {
@@ -68,8 +103,11 @@ export function buildInspectionHtml(d: Data, assets: {
   employeeSig: string | null; supervisorSig: string | null;
   photos: { src: string; caption: string }[];
   brand: { company: string; logo: string | null };
+  maintenance?: MaintenanceEntry[];
 }): string {
   const i = d.inspection;
+  const maint = assets.maintenance ?? [];
+  const fixNo: FixNumbers = new Map(maint.flatMap((m, n) => m.repairs.map((r) => [r.id, n + 1] as [number, number])));
   const info = [i.year, i.make, i.model].filter(Boolean).join(" ");
   const brandBar = `<div class="brand">${assets.brand.logo ? `<img src="${assets.brand.logo}" alt="">` : ""}
     <div><b>${esc(assets.brand.company)}</b><span>Truck Inspection Sheet</span></div></div>`;
@@ -86,7 +124,15 @@ export function buildInspectionHtml(d: Data, assets: {
   const flagged = i.mileage_flagged
     ? `<div class="flag">Lower than last recorded (${Number(i.previous_mileage).toLocaleString("en-US")})</div>` : "";
 
-  const page1 = `<section class="page">
+  // Page 1 should hold the whole sheet. Repair notes, a long damage legend or long notes add lines, so shrink the
+  // diagram a little for each line beyond what fits (about 0.14in a line), down to 1.9in so pins stay readable.
+  const noteLines = (s: string | null) => (s ? s.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / 60)), 0) : 0);
+  const extraLines = checklistExtraLines(ext, int, fixNo)
+    + Math.max(0, Math.ceil(truckMarks.length / 2) - 1)
+    + Math.max(0, Math.max(noteLines(i.existing_notes), noteLines(i.new_observations)) - 4);
+  const diagramIn = Math.max(1.9, DIAGRAM_MAX_IN - 0.14 * Math.max(0, extraLines - 3));
+
+  const page1 = `<section class="p1">
     ${brandBar}
     ${header}
     <table class="grid meta">
@@ -94,13 +140,13 @@ export function buildInspectionHtml(d: Data, assets: {
       <tr><td class="v">${fmtDate(i.inspection_date)}</td><td class="v">${esc(i.inspector_name)}</td>
         <td class="yn${i.oil_change_due ? " on" : ""}">YES</td><td class="yn${i.oil_change_due ? "" : " on"}">NO</td>
         <td class="v">${i.mileage != null ? Number(i.mileage).toLocaleString("en-US") : ""}${flagged}</td></tr>
-      <tr><td colspan="5" class="diacell">${diagramBlock(assets.truckDiagram, truckMarks)}</td></tr>
+      <tr><td colspan="5" class="diacell">${diagramBlock(assets.truckDiagram, truckMarks, diagramIn)}</td></tr>
     </table>
     <table class="grid notes">
       <tr class="sh"><th class="l">Existing Notes:</th><th class="l">New Observations:</th></tr>
       <tr><td>${esc(i.existing_notes)}</td><td>${esc(i.new_observations)}</td></tr>
     </table>
-    ${checklistTable(ext, int, "Inspection Item (Exterior)", "Inspection Items (Interior)")}
+    ${checklistTable(ext, int, "Inspection Item (Exterior)", "Inspection Items (Interior)", fixNo)}
   </section>`;
 
   const signoff = `<table class="grid sign">
@@ -117,14 +163,14 @@ export function buildInspectionHtml(d: Data, assets: {
     </table>`;
 
   const page2 = i.trailer_inspected
-    ? `<section class="page">
+    ? `<section class="trl">
         ${header}
         <table class="grid meta">
           <tr><th style="width:18%">Trailer Number</th><td class="v">${esc(i.trailer_number_text)}</td><th style="width:18%">Plate Number</th><td class="v">${esc(i.trailer_plate_text)}</td></tr>
           ${d.trailerDiagram?.name ? `<tr><th>Trailer Type</th><td colspan="3" class="v">${esc(d.trailerDiagram.name)}</td></tr>` : ""}
           <tr><td colspan="4" class="diacell">${diagramBlock(assets.trailerDiagram, trailerMarks)}</td></tr>
         </table>
-        ${checklistTable(trl.slice(0, Math.ceil(trl.length / 2)), trl.slice(Math.ceil(trl.length / 2)), "Inspection Item", "Inspection Items")}
+        ${checklistTable(trl.slice(0, Math.ceil(trl.length / 2)), trl.slice(Math.ceil(trl.length / 2)), "Inspection Item", "Inspection Items", fixNo)}
         ${signoff}
       </section>`
     : `<section class="keep">${signoff}</section>`;
@@ -135,15 +181,43 @@ export function buildInspectionHtml(d: Data, assets: {
     : "";
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(i.truck_code)} inspection</title><style>${CSS}</style></head>
-  <body>${page1}${page2}${photoPages}</body></html>`;
+  <body>${page1}${page2}${maintenanceSection(maint)}${photoPages}</body></html>`;
+}
+
+const money = (v: unknown) => `$${Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** The maintenance entries that closed this inspection's repairs, numbered to match the checklist. */
+function maintenanceSection(list: MaintenanceEntry[]) {
+  if (!list.length) return "";
+  const row = (label: string, value: string) => (value ? `<tr><th>${label}</th><td colspan="3">${value}</td></tr>` : "");
+  return `<section class="maint"><h2>Repairs fixed — maintenance log</h2>${list.map((m, n) => {
+    const fixed = m.repairs.map((r) => `${esc(r.label)}${r.note ? ` <span class="rnote">(${esc(r.note)})</span>` : ""}`).join("<br>")
+      + (m.other_repairs ? `<br><span class="muted">Also fixed ${m.other_repairs} repair${m.other_repairs > 1 ? "s" : ""} from other inspections.</span>` : "");
+    const who = [m.performed_by ? esc(m.performed_by) : "", m.vendor ? `outside shop: ${esc(m.vendor)}` : ""].filter(Boolean).join(" · ");
+    const logged = `${fmtDate(m.created_at)}${m.created_by_name ? ` by ${esc(m.created_by_name)}` : ""}${
+      m.edits ? ` · changed ${m.edits} time${m.edits > 1 ? "s" : ""} after that (history in the app)` : ""}`;
+    return `<table class="grid mt">
+      <tr class="sh"><th colspan="4" class="l">Maintenance entry ${n + 1} · ${esc(m.category_label)}</th></tr>
+      <tr><th>Date</th><td class="v">${fmtDate(m.service_date)}</td><th>Mileage</th><td class="v">${m.mileage != null ? Number(m.mileage).toLocaleString("en-US") : ""}</td></tr>
+      <tr><th>Done by</th><td class="v">${who}</td><th>Cost</th><td class="v">${m.cost != null ? money(m.cost) : ""}</td></tr>
+      ${row("Repairs fixed", fixed)}
+      ${row("Work done", esc(m.description))}
+      ${row("Parts", esc(m.parts ?? ""))}
+      ${row("Notes", esc(m.notes ?? ""))}
+      ${row("Logged", logged)}
+    </table>`;
+  }).join("")}</section>`;
 }
 
 const CSS = `
 @page { size: Letter; margin: 0.4in 0.45in; }
 * { box-sizing: border-box; }
 body { margin: 0; font: 9pt/1.22 Calibri, Carlito, "Liberation Sans", Arial, sans-serif; color: #111; }
-.page { break-after: page; }
-.page:last-of-type { break-after: auto; }
+/* Page 1 is sized to fit (see diagramIn). If a very busy sheet still doesn't, the checklist carries on to the next page
+   with its header repeated, followed by the sign-off; the trailer sheet always starts a page of its own. */
+.trl { break-before: page; }
+.cl thead { display: table-header-group; }
+.cl tr { break-inside: avoid; }
 .keep { break-inside: avoid; margin-top: 8pt; }
 .brand { display: flex; align-items: center; gap: 10pt; margin-bottom: 5pt; height: 0.36in; }
 .brand img { max-height: 0.36in; max-width: 1.6in; object-fit: contain; }
@@ -176,6 +250,7 @@ table.grid { width: 100%; border-collapse: collapse; margin-bottom: 7pt; }
 .cl td { padding: 1.2pt 4pt; }
 .cl td.c { text-align: center; vertical-align: middle; }
 .ck { width: 10pt; height: 10pt; vertical-align: middle; }
+.sub { font-size: 7.8pt; line-height: 1.2; }
 .rnote { font-size: 7.8pt; color: #b4402a; font-style: italic; }
 .resolved { font-size: 7.6pt; color: #2f6b3a; }
 .comments { height: 48pt; white-space: pre-wrap; }
@@ -183,6 +258,13 @@ table.grid { width: 100%; border-collapse: collapse; margin-bottom: 7pt; }
 .sign td.sig img { height: 36pt; max-width: 70%; }
 .sign .who { position: absolute; right: 6pt; bottom: 3pt; font-size: 8pt; color: #444; }
 .sign td.v { vertical-align: middle; }
+.maint { margin-top: 10pt; }
+.maint h2 { font-size: 12pt; margin: 0 0 6pt; break-after: avoid; }
+.mt { break-inside: avoid; }
+.mt th { width: 14%; text-align: left; }
+.mt td { white-space: pre-wrap; }
+.mt td.v { width: 36%; }
+.mt .muted { color: #555; font-size: 8pt; }
 .photos h2 { font-size: 12pt; margin: 0 0 8pt; }
 .photos { break-before: page; }
 .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10pt; }
@@ -229,6 +311,11 @@ export async function renderHtmlToPdf(html: string): Promise<Buffer> {
 }
 
 export async function renderInspectionPdf(d: Data): Promise<Buffer> {
+  return renderHtmlToPdf(await inspectionPdfHtml(d));
+}
+
+/** The PDF's HTML with every image inlined (separate from rendering so tests can check it). */
+export async function inspectionPdfHtml(d: Data): Promise<string> {
   const i = d.inspection;
   const truckDia = d.truckDiagram.file_path ? await readDiagram(d.truckDiagram.file_path).catch(() => null) : null;
   const trailerDia = d.trailerDiagram?.file_path ? await readDiagram(d.trailerDiagram.file_path).catch(() => null) : null;
@@ -250,13 +337,26 @@ export async function renderInspectionPdf(d: Data): Promise<Buffer> {
     });
   }
 
-  const html = buildInspectionHtml(d, {
+  // Maintenance entries that closed this inspection's repairs; their photos go on the photo pages too.
+  const maintenance = await maintenanceForInspection(i.id);
+  for (const [n, m] of maintenance.entries()) {
+    for (const p of m.photos) {
+      const buf = await safeRead(p.file_path);
+      if (!buf) continue;
+      photos.push({
+        src: dataUrl(buf, buf[0] === 0x89 ? "image/png" : "image/jpeg"),
+        caption: [`Maintenance entry ${n + 1}`, p.caption].filter(Boolean).join(" — "),
+      });
+    }
+  }
+
+  return buildInspectionHtml(d, {
     truckDiagram: truckDia ? dataUrl(truckDia.data, truckDia.mime) : null,
     trailerDiagram: trailerDia ? dataUrl(trailerDia.data, trailerDia.mime) : null,
     employeeSig: emp ? dataUrl(emp, "image/png") : null,
     supervisorSig: sup ? dataUrl(sup, "image/png") : null,
     photos,
     brand: { company: brand.company_name, logo: logo ? dataUrl(logo, logo[0] === 0x89 ? "image/png" : "image/jpeg") : null },
+    maintenance,
   });
-  return renderHtmlToPdf(html);
 }

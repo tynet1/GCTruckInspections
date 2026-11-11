@@ -229,6 +229,65 @@ export async function loadEntry(id: number) {
   };
 }
 
+/**
+ * Live (not voided) maintenance entries that fixed repairs on one inspection, oldest first, for the PDF.
+ * `repairs` are the ones on this inspection; `other_repairs` counts any it fixed on other inspections.
+ */
+export interface MaintenanceEntry {
+  id: number;
+  service_date: string;
+  mileage: number | null;
+  category: string;
+  category_label: string;
+  description: string;
+  parts: string | null;
+  cost: number | null;
+  performed_by: string | null;
+  vendor: string | null;
+  notes: string | null;
+  created_at: Date;
+  created_by_name: string | null;
+  edits: number;
+  repairs: { id: number; label: string; note: string | null }[];
+  other_repairs: number;
+  photos: { id: string; caption: string | null; file_path: string }[];
+}
+
+export async function maintenanceForInspection(inspectionId: string): Promise<MaintenanceEntry[]> {
+  const entries = await q(
+    `SELECT DISTINCT s.id, s.service_date, s.mileage, s.category, s.description, s.parts, s.cost, s.performed_by,
+            s.vendor, s.notes, s.created_at, cu.name AS created_by_name,
+            (SELECT count(*) FROM service_log_history h WHERE h.service_log_id = s.id)::int AS edits
+       FROM service_log_repairs r
+       JOIN inspection_items ii ON ii.id = r.inspection_item_id
+       JOIN service_logs s ON s.id = r.service_log_id
+       LEFT JOIN users cu ON cu.id = s.created_by
+      WHERE ii.inspection_id = $1 AND r.active AND s.voided_at IS NULL
+      ORDER BY s.service_date, s.id`,
+    [inspectionId],
+  );
+  if (!entries.length) return [];
+  const ids = entries.map((e) => e.id);
+  const repairs = await q(
+    `SELECT r.service_log_id, ii.id, ii.label_snapshot AS label, ii.note, (ii.inspection_id = $2) AS here
+       FROM service_log_repairs r JOIN inspection_items ii ON ii.id = r.inspection_item_id
+      WHERE r.service_log_id = ANY($1::int[]) AND r.active
+      ORDER BY ii.section, ii.id`,
+    [ids, inspectionId],
+  );
+  const photos = await q(
+    `SELECT id, service_log_id, caption, file_path FROM photos WHERE service_log_id = ANY($1::int[]) ORDER BY created_at, id`,
+    [ids],
+  );
+  return entries.map((e) => ({
+    ...e,
+    category_label: CATEGORIES[e.category] ?? e.category,
+    repairs: repairs.filter((r) => r.service_log_id === e.id && r.here).map(({ id, label, note }) => ({ id, label, note })),
+    other_repairs: repairs.filter((r) => r.service_log_id === e.id && !r.here).length,
+    photos: photos.filter((p) => p.service_log_id === e.id).map(({ id, caption, file_path }) => ({ id, caption, file_path })),
+  }));
+}
+
 const LIST_COLS = `
   s.id, s.vehicle_id, v.truck_code, s.service_date, s.mileage, s.category, s.description, s.cost,
   s.performed_by, s.vendor, (s.voided_at IS NOT NULL) AS voided,

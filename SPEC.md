@@ -115,6 +115,13 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
   - Final pages: photos, 2 per row, with captions
 - Filename: `<TruckCode>_<YYYY-MM-DD>_inspection.pdf`
 - The logo and company name from branding print at the top of page 1.
+- If repairs were closed through the maintenance log, a "Repairs fixed — maintenance log" section follows the sign-off: one
+  table per entry (number, type, date, mileage, done by / outside shop, cost, repairs fixed, work done, parts, notes, who
+  logged it and whether it was edited later). The checklist line says "✓ Fixed <date> (maintenance entry N)", and the
+  entry's photos go on the photo pages captioned "Maintenance entry N". Voided entries are left out.
+- Page 1 stays one page: the diagram shrinks (down to 1.9in) when repair notes, a long damage legend or long notes need the
+  room. A sheet too busy even for that continues on the next page with the checklist header repeated, never leaving a
+  blank page. Timestamps print in the server's time zone (TZ), not UTC.
 - Batch export (phase 2): pick a date range and optionally trucks; download **one separate PDF per inspection** (zipped, each named like a single export), not one combined PDF. Plus CSV export of inspections and repair items.
 
 ## 7. API sketch

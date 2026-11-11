@@ -26,6 +26,17 @@ if (!url) {
   const { hashSecret } = await import("../src/auth.ts");
   const { closePdfBrowser } = await import("../src/pdf.ts");
   const { cleanupOrphanPhotos } = await import("../src/routes/photos.ts");
+  const { loadInspection } = await import("../src/routes/inspections.ts");
+  const { inspectionPdfHtml } = await import("../src/pdf.ts");
+  const pdfHtmlFor = async (inspectionId: string) => inspectionPdfHtml((await loadInspection(inspectionId))!);
+  const { fmtDate: pdfDate } = await import("../src/pdf.ts");
+
+  test("PDF dates: plain dates as-is, timestamps in the server's time zone (not UTC)", () => {
+    assert.equal(pdfDate("2026-11-10"), "11/10/2026");
+    const evening = new Date(2026, 10, 10, 21, 30); // 9:30pm local on Nov 10, which is already Nov 11 in UTC
+    assert.equal(pdfDate(evening), "11/10/2026");
+    assert.equal(pdfDate(null), "");
+  });
 
   // 1x1 PNG and a tiny JPEG header are enough for the type sniffing.
   const PNG = "data:image/png;base64," + Buffer.concat([
@@ -525,6 +536,21 @@ if (!url) {
       assert.ok(new RegExp(brakes.not, "i").test("Brake lights working"), "brake lights aren't brake work");
     });
 
+    test("the inspection PDF includes the maintenance entry that fixed a repair", { timeout: 60000 }, async () => {
+      const { inspection_id: inspId } = await one(`SELECT inspection_id FROM inspection_items WHERE id = $1`, [repairIds[0]]);
+      const html = await pdfHtmlFor(inspId);
+      assert.match(html, /Repairs fixed — maintenance log/);
+      assert.match(html, /Maintenance entry 1 · Repair/);
+      assert.match(html, /Replaced left tail light and brake light bulbs/);
+      assert.match(html, /\$18\.40/);
+      assert.match(html, /2x 3157 bulbs/);
+      assert.match(html, /Fixed [\d/]+ \(maintenance entry 1\)/, "the checklist line points at the entry");
+      assert.match(html, /Maintenance entry 1 — Receipt/, "the entry's photo is on the photo pages");
+      const pdf = await inject("GET", `/inspections/${inspId}/pdf`, { cookie: supCookie });
+      assert.equal(pdf.statusCode, 200);
+      assert.equal(pdf.rawPayload.subarray(0, 4).toString(), "%PDF");
+    });
+
     test("bad input is refused", async () => {
       const noWork = await inject("POST", "/service-logs", { cookie: shopCookie, body: entryBody({ description: " " }) });
       assert.equal(noWork.statusCode, 400);
@@ -575,6 +601,8 @@ if (!url) {
       assert.equal(open.length, 2, "both repairs are open again");
       assert.equal((await inject("PATCH", `/service-logs/${entryId}`, { cookie: shopCookie, body: { version: v.json().version, cost: "1" } })).statusCode, 409);
       assert.equal((await inject("POST", `/service-logs/${entryId}/void`, { cookie: shopCookie, body: { reason: "again" } })).statusCode, 409);
+      const { inspection_id: inspId } = await one(`SELECT inspection_id FROM inspection_items WHERE id = $1`, [repairIds[0]]);
+      assert.doesNotMatch(await pdfHtmlFor(inspId), /maintenance log/, "a voided entry isn't on the PDF");
 
       // A reopened repair can be fixed by a new entry.
       const again = await inject("POST", "/service-logs", { cookie: shopCookie, body: entryBody({ repair_item_ids: [repairIds[0]] }) });
