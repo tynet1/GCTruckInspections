@@ -25,6 +25,7 @@ if (!url) {
   const { buildApp } = await import("../src/server.ts");
   const { hashSecret } = await import("../src/auth.ts");
   const { closePdfBrowser } = await import("../src/pdf.ts");
+  const { cleanupOrphanPhotos } = await import("../src/routes/photos.ts");
 
   // 1x1 PNG and a tiny JPEG header are enough for the type sniffing.
   const PNG = "data:image/png;base64," + Buffer.concat([
@@ -423,6 +424,11 @@ if (!url) {
       assert.equal((await app.inject({ method: "GET", url: "/api/branding/logo" })).statusCode, 404);
     });
 
+    test("admin can give someone the shop role", async () => {
+      const add = await inject("POST", "/admin/users", { cookie: adminCookie, body: { name: "Shop Test", role: "shop", pin: "2468" } });
+      assert.equal(add.statusCode, 201, add.body);
+    });
+
     test("admin adds a crew user who can then sign in", async () => {
       const add = await inject("POST", "/admin/users", { cookie: adminCookie, body: { name: "New Crew", role: "crew", pin: "5555" } });
       assert.equal(add.statusCode, 201, add.body);
@@ -430,6 +436,144 @@ if (!url) {
       assert.equal(signin.statusCode, 200);
       const bad = await inject("POST", "/admin/users", { cookie: adminCookie, body: { name: "x", role: "crew", pin: "12" } });
       assert.equal(bad.statusCode, 400);
+    });
+  });
+
+  describe("maintenance log", () => {
+    let shopCookie = "";
+    let repairIds: number[] = [];
+    let entryId = 0;
+    let otherTruck = 0;
+
+    function entryBody(over: Record<string, unknown> = {}) {
+      return {
+        client_id: randomUUID(),
+        vehicle_id: vehicleId,
+        service_date: "2026-11-10",
+        mileage: 61000,
+        category: "repair",
+        description: "Replaced left tail light and brake light bulbs",
+        parts: "2x 3157 bulbs",
+        cost: "$18.40",
+        performed_by: "Frank",
+        ...over,
+      };
+    }
+
+    before(async () => {
+      await q(`INSERT INTO users (name, role, pin_hash) VALUES ('Frank Shop', 'shop', $1)`, [await hashSecret("1357")]);
+      const u = await one(`SELECT id FROM users WHERE name = 'Frank Shop'`);
+      shopCookie = cookieOf(await inject("POST", "/auth/pin", { body: { user_id: u.id, pin: "1357" } }));
+      otherTruck = (await one(`SELECT id FROM vehicles WHERE truck_code = 'AZ053'`)).id;
+      // A fresh inspection on AZ018 with two open repairs for the shop to fix.
+      const body = submitBody({ mileage: 60500 });
+      const [a, b] = [checklist[1].id, checklist[2].id];
+      body.items = (body.items as { checklist_item_id: number; result: string; note?: string }[]).map((i) =>
+        i.checklist_item_id === a || i.checklist_item_id === b ? { ...i, result: "repair", note: "Bulb out" } : i);
+      const res = await inject("POST", "/inspections", { cookie: crewCookie, body });
+      assert.equal(res.statusCode, 201, res.body);
+      repairIds = (await q(`SELECT id FROM inspection_items WHERE inspection_id = $1 AND result = 'repair' ORDER BY id`, [res.json().id]))
+        .map((r) => r.id);
+      assert.equal(repairIds.length, 2);
+    });
+
+    test("who can see and write the log", async () => {
+      assert.equal((await inject("GET", `/vehicles/${vehicleId}/service`, { cookie: crewCookie })).statusCode, 403);
+      assert.equal((await inject("GET", `/vehicles/${vehicleId}/service`, { cookie: supCookie })).statusCode, 200);
+      assert.equal((await inject("POST", "/service-logs", { cookie: supCookie, body: entryBody() })).statusCode, 403);
+      assert.equal((await inject("POST", "/service-logs", { cookie: crewCookie, body: entryBody() })).statusCode, 403);
+    });
+
+    test("shop logs work that fixes a repair, with a receipt photo; a retry doesn't duplicate it", async () => {
+      const { res: up, id: photoId } = await uploadPhoto(shopCookie);
+      assert.equal(up.statusCode, 201);
+      const body = entryBody({ repair_item_ids: [repairIds[0]], photos: [{ id: photoId, caption: "Receipt" }] });
+      const a = await inject("POST", "/service-logs", { cookie: shopCookie, body });
+      assert.equal(a.statusCode, 201, a.body);
+      const b = await inject("POST", "/service-logs", { cookie: shopCookie, body });
+      assert.equal(b.statusCode, 200);
+      assert.equal(b.json().id, a.json().id);
+      entryId = a.json().id;
+
+      const e = (await inject("GET", `/service-logs/${entryId}`, { cookie: supCookie })).json();
+      assert.equal(e.cost, 18.4);
+      assert.equal(e.category_label, "Repair");
+      assert.equal(e.repairs.length, 1);
+      assert.equal(e.photos[0].caption, "Receipt");
+      const item = await one(`SELECT resolved_at, resolution_note FROM inspection_items WHERE id = $1`, [repairIds[0]]);
+      assert.ok(item.resolved_at, "the repair is closed");
+      assert.match(item.resolution_note, /maintenance log/);
+      const v = (await inject("GET", `/vehicles/${vehicleId}`, { cookie: crewCookie })).json();
+      assert.ok(!v.openRepairs.some((r: { id: number }) => r.id === repairIds[0]));
+    });
+
+    test("bad input is refused", async () => {
+      const noWork = await inject("POST", "/service-logs", { cookie: shopCookie, body: entryBody({ description: " " }) });
+      assert.equal(noWork.statusCode, 400);
+      const badType = await inject("POST", "/service-logs", { cookie: shopCookie, body: entryBody({ category: "paint" }) });
+      assert.equal(badType.statusCode, 400);
+      const badCost = await inject("POST", "/service-logs", { cookie: shopCookie, body: entryBody({ cost: "lots" }) });
+      assert.equal(badCost.statusCode, 400);
+      const wrongTruck = await inject("POST", "/service-logs", {
+        cookie: shopCookie, body: entryBody({ vehicle_id: otherTruck, repair_item_ids: [repairIds[1]] }),
+      });
+      assert.equal(wrongTruck.statusCode, 422);
+      assert.equal(wrongTruck.json().details.code, "bad_repairs");
+    });
+
+    test("edits keep history; a stale edit is refused", async () => {
+      const e = (await inject("GET", `/service-logs/${entryId}`, { cookie: shopCookie })).json();
+      const ok = await inject("PATCH", `/service-logs/${entryId}`, {
+        cookie: shopCookie, body: { version: e.version, cost: "21.90", repair_item_ids: [repairIds[1]] },
+      });
+      assert.equal(ok.statusCode, 200, ok.body);
+      assert.equal(ok.json().cost, 21.9);
+      assert.equal(ok.json().repairs.length, 2);
+      assert.deepEqual(ok.json().history[0].changes, [{ field: "cost", from: 18.4, to: 21.9 }]);
+      const stale = await inject("PATCH", `/service-logs/${entryId}`, { cookie: shopCookie, body: { version: e.version, cost: "1" } });
+      assert.equal(stale.statusCode, 409);
+      assert.equal(stale.json().details.code, "stale");
+    });
+
+    test("next due shows on the truck", async () => {
+      const r = await inject("POST", "/service-logs", {
+        cookie: shopCookie,
+        body: entryBody({ category: "oil_change", description: "Oil and filter", next_due_mileage: 61200, next_due_date: "2027-05-10" }),
+      });
+      assert.equal(r.statusCode, 201, r.body);
+      const s = (await inject("GET", `/vehicles/${vehicleId}/service`, { cookie: shopCookie })).json();
+      const oil = s.next_due.find((d: { category: string }) => d.category === "oil_change");
+      assert.equal(oil.mileage, 61200);
+      assert.equal(oil.state, "soon", "within 500 miles of the due mileage");
+      assert.ok(s.entries.length >= 2);
+    });
+
+    test("voiding reopens the repairs it closed; entries and photos can't be deleted or changed in the database", async () => {
+      const v = await inject("POST", `/service-logs/${entryId}/void`, { cookie: shopCookie, body: { reason: "Logged on the wrong day" } });
+      assert.equal(v.statusCode, 200, v.body);
+      assert.equal(v.json().voided.reason, "Logged on the wrong day");
+      assert.equal(v.json().history.at(-1).voided, true);
+      const open = await q(`SELECT id FROM inspection_items WHERE id = ANY($1::int[]) AND resolved_at IS NULL`, [repairIds]);
+      assert.equal(open.length, 2, "both repairs are open again");
+      assert.equal((await inject("PATCH", `/service-logs/${entryId}`, { cookie: shopCookie, body: { version: v.json().version, cost: "1" } })).statusCode, 409);
+      assert.equal((await inject("POST", `/service-logs/${entryId}/void`, { cookie: shopCookie, body: { reason: "again" } })).statusCode, 409);
+
+      // A reopened repair can be fixed by a new entry.
+      const again = await inject("POST", "/service-logs", { cookie: shopCookie, body: entryBody({ repair_item_ids: [repairIds[0]] }) });
+      assert.equal(again.statusCode, 201, again.body);
+
+      await assert.rejects(q(`DELETE FROM service_logs WHERE id = $1`, [entryId]), /can't be deleted/);
+      await assert.rejects(q(`UPDATE photos SET caption = 'x' WHERE service_log_id = $1`, [entryId]), /read-only/);
+      await assert.rejects(q(`UPDATE service_log_history SET old_row = '{}'`), /can't be updated/);
+    });
+
+    test("orphan photo cleanup never removes maintenance photos", async () => {
+      await pool.query(`ALTER TABLE photos DISABLE TRIGGER photos_immutable`);
+      await q(`UPDATE photos SET created_at = now() - interval '30 days' WHERE service_log_id = $1`, [entryId]);
+      await pool.query(`ALTER TABLE photos ENABLE TRIGGER photos_immutable`);
+      await cleanupOrphanPhotos(() => {});
+      const left = await q(`SELECT id FROM photos WHERE service_log_id = $1`, [entryId]);
+      assert.equal(left.length, 1);
     });
   });
 }

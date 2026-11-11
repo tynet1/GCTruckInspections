@@ -39,7 +39,8 @@ npm run user -- add --name "X" --role crew --pin 1234
 - Everything runs with `docker compose up -d` on Ubuntu. Secrets go in `.env` (never committed); ship a `.env.example`.
   Local dev settings go in `.env.local` (also gitignored), so they never collide with the server's `.env`.
 - For now it runs on Tyler's Windows PC under Docker Desktop (needs WSL) and only Tyler's phone uses it.
-- Phase 1 (MVP) is built, plus trailer types and branding. Phase 2 (maintenance log, fleet management, separate-PDF batch
-  export) is scoped in SPEC §9; confirm the open fleet-management questions with Tyler before building it.
+- Phase 1 (MVP) is built, plus trailer types and branding. Phase 2: the maintenance log is built (`src/routes/service.ts`,
+  `public/js/svc.js`, `views/service-*.js`); fleet management and separate-PDF batch export are next. Confirm the open
+  fleet-management questions in SPEC §9 with Tyler before building it.
   Phase 3 is a full code review, performance/stability work and a burn-in test.
 - Ask Tyler before choosing a remote-access method other than Cloudflare Tunnel, or before adding paid services.

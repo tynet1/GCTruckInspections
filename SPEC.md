@@ -1,7 +1,7 @@
 # Grounds Control Vehicle Inspections — Build Spec
 
 Owner: Tyler Longshore (Business Systems & Technology Manager)
-Status: phase 1 (MVP) built, plus trailer types and branding; phase 2 scoped in §9, waiting on answers
+Status: phase 1 (MVP) built, plus trailer types and branding; phase 2 maintenance log built; fleet management waiting on answers (§9)
 Target: for now, Docker Desktop on Tyler's own Windows PC, used from Tyler's phone only. Moves to a company server later.
 
 ## 1. Why
@@ -20,7 +20,7 @@ The app moves the same sheet onto a phone and adds damage pins, photos, signatur
 |---|---|---|
 | crew | Crew leads and drivers | Sign in with name + PIN, start or resume an inspection, upload photos, submit |
 | supervisor | Crew supervisors, fleet/shop | Everything crew can do, plus review and sign off inspections, mark repairs resolved, export PDFs |
-| shop (phase 2) | Shop manager | Log maintenance and repairs on any truck, close repair items with the work done; read inspections |
+| shop | Shop manager | Everything crew can do, plus log, edit and void maintenance entries, and close repair items; can't sign off inspections or export PDFs |
 | admin | Tyler, COO | Everything, plus manage trucks, trailers, diagrams, checklist items, users and branding |
 
 Crew sign-in has to be fast on a phone in a truck: pick your name, enter a 4–6 digit PIN, and the session stays signed in for about 30 days. Supervisors and admins use email + password. Microsoft 365 SSO is a later phase (see §9).
@@ -68,6 +68,11 @@ Tunnel, which needs a domain on Tyler's Cloudflare account.
    - Drafts autosave on the device (IndexedDB) and survive closing the browser
 5. **Inspection detail:** everything submitted, repairs listed first, damage diagram with pins, photo gallery with full-screen view, full checklist, signatures. Supervisor sign-off happens here (name + finger signature). **Export PDF** button.
 6. **Repairs board** (supervisor): all open repair items across the fleet, filterable by truck. Mark resolved with a note, optionally linked to a service log entry.
+6a. **Maintenance log** (shop, admin; supervisors can read): on the truck page, "Next due" (from the newest entry of each type,
+   orange within 500 miles or 14 days, red when due), the list of entries, and "+ Log maintenance". The entry form has date,
+   mileage, type of work (oil change, tires, brakes, repair, preventive maintenance, inspection/registration, other), work done,
+   parts, cost, done by, outside shop, the truck's open repairs to tick off, next due mileage/date, photos, notes. An entry
+   shows its repairs, photos and every change ("Cost: $64.20 → $66.40"). Shop/admin can edit it or void it with a reason.
 7. **Admin:** trucks (add, edit every header field, retire, pick or upload the body diagram, set the trailer type or "no trailer"), trailer types (name + picture), users and PINs, branding (company name, app name, header color, logo), checklist items (add, reorder, deactivate; never hard-delete).
 
 A trailer type is a named trailer diagram. Every inspection records which truck and trailer pictures it was drawn on, so changing a truck's diagram or trailer type later never moves old pins.
@@ -82,6 +87,9 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - Files are written to a temp file, flushed to disk and renamed, so a crash never leaves a half-written photo.
 - Schema changes only add numbered migrations, each in one transaction.
 - Nightly backups (database + uploads) to a second location, and a restore is tested.
+- Maintenance entries: never deleted (void with a reason; the database refuses deletes), every edit saves the previous version,
+  an edit made from an out-of-date copy is refused instead of overwriting, and voiding reopens the repairs the entry closed.
+  Orphan-photo cleanup skips photos attached to an entry.
 
 ## 5. Business rules
 
@@ -119,6 +127,15 @@ POST /inspection-items/:id/resolve {note}                 supervisor+
 GET  /inspections/:id/pdf
 GET  /export/inspections.csv?from&to&vehicle
 admin CRUD: /vehicles, /trailers, /diagrams, /users, /checklist-items
+
+Maintenance log (built):
+GET  /service-config                -> {categories}                          shop, supervisor, admin
+GET  /vehicles/:id/service          -> {entries, next_due, current_mileage}  shop, supervisor, admin
+GET  /service-logs?limit            -> recent entries across the fleet
+GET  /service-logs/:id              -> entry + repairs + photos + history
+POST /service-logs                  {client_id, vehicle_id, ..., repair_item_ids[], photos[]}   shop, admin (idempotent)
+PATCH /service-logs/:id             {version, changed fields, more repair_item_ids/photos}      shop, admin (409 if stale)
+POST /service-logs/:id/void         {reason}                                                    shop, admin
 ```
 
 ## 8. Data notes from the paper forms
@@ -134,9 +151,8 @@ admin CRUD: /vehicles, /trailers, /diagrams, /users, /checklist-items
 1. **MVP (built):** auth, trucks, inspection form, photos, signatures, detail view, supervisor sign-off, single PDF export, backups, Cloudflare Tunnel.
    Added after review: full truck editor with trailer type, and branding.
 2. **Maintenance log and fleet management:**
-   - **Maintenance log** for the shop manager (new `shop` role): log service and repairs on a truck (date, mileage, work done,
-     parts, cost, who did it), close the repair items it fixes, and see each truck's full history. Replaces Frank's paper logs
-     (the `service_logs` table in 001 is the starting point).
+   - **Maintenance log (built, see §4 6a):** for the shop manager (`shop` role): log service and repairs on a truck, close the
+     repair items it fixes, next-due tracking, and each truck's full history. Replaces Frank's paper logs.
    - **Fleet management:** add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
      and the rest of the truck's lifecycle. Scope to confirm with Tyler before building; proposed:
      status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage

@@ -2,12 +2,15 @@
 import { api, onSignedOut } from "./api.js";
 import { allDrafts, flush, onDraftsChange, onSent } from "./drafts.js";
 import { loadBranding } from "./brand.js";
-import { atLeast, homeHeader, state } from "./ui.js";
+import { allSvcDrafts, flushSvc, onSvcChange, onSvcSent } from "./svc.js";
+import { atLeast, can, homeHeader, state } from "./ui.js";
 import { $, esc, modal, toast } from "./util.js";
 import * as admin from "./views/admin.js";
 import * as detail from "./views/detail.js";
 import * as form from "./views/form.js";
 import * as home from "./views/home.js";
+import * as serviceDetail from "./views/service-detail.js";
+import * as serviceForm from "./views/service-form.js";
 import * as signin from "./views/signin.js";
 import * as truck from "./views/truck.js";
 
@@ -16,6 +19,8 @@ const routes = [
   { re: /^#\/truck\/(\d+)$/, view: truck },
   { re: /^#\/inspect\/(\d+)$/, view: form },
   { re: /^#\/inspection\/([0-9a-f-]{36})$/i, view: detail },
+  { re: /^#\/service\/(new|edit)\/(\d+)$/, view: serviceForm, allow: () => can.logService() },
+  { re: /^#\/service\/(\d+)$/, view: serviceDetail, allow: () => can.seeService() },
   { re: /^#\/admin(?:\/(users|trucks|branding))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
 
@@ -38,7 +43,7 @@ async function route() {
   for (const r of routes) {
     const m = hash.match(r.re);
     if (!m) continue;
-    if (r.role && !atLeast(r.role)) break;
+    if ((r.role && !atLeast(r.role)) || (r.allow && !r.allow())) break;
     current = r.view;
     try {
       await r.view.render(app, ...m.slice(1));
@@ -55,13 +60,20 @@ function onSignedIn(user) {
   state.user = user;
   try { localStorage.setItem("gc-user", JSON.stringify(user)); } catch { /* private mode */ }
   flush();
+  flushSvc();
   route();
 }
 
+/** Inspections and maintenance entries saved on this phone but not yet uploaded. */
+async function queuedCounts() {
+  const [a, b] = await Promise.all([allDrafts().catch(() => []), allSvcDrafts().catch(() => [])]);
+  return { inspections: a.filter((d) => d.status === "queued").length, service: b.filter((d) => d.status === "queued").length };
+}
+
 export async function signOut() {
-  const queued = (await allDrafts()).filter((d) => d.status === "queued");
-  if (queued.length) {
-    toast("Wait until your saved inspections finish uploading before signing out.", 4000);
+  const q = await queuedCounts();
+  if (q.inspections || q.service) {
+    toast("Wait until your saved work finishes uploading before signing out.", 4000);
     return;
   }
   try { await api("/auth/logout", { method: "POST" }); } catch { /* offline: still clear locally */ }
@@ -86,14 +98,16 @@ export function openMenu() {
 
 async function updateNetbar() {
   const bar = $("#netbar");
-  const queued = (await allDrafts().catch(() => [])).filter((d) => d.status === "queued");
-  if (queued.length && state.user) {
-    const n = queued.length === 1 ? "1 inspection" : `${queued.length} inspections`;
-    bar.innerHTML = `<div class="in"><span>${n} saved on phone, not yet uploaded</span><button id="retryNow">Retry now</button></div>`;
+  const q = await queuedCounts();
+  if ((q.inspections || q.service) && state.user) {
+    const parts = [];
+    if (q.inspections) parts.push(q.inspections === 1 ? "1 inspection" : `${q.inspections} inspections`);
+    if (q.service) parts.push(q.service === 1 ? "1 maintenance entry" : `${q.service} maintenance entries`);
+    bar.innerHTML = `<div class="in"><span>${parts.join(" and ")} saved on phone, not yet uploaded</span><button id="retryNow">Retry now</button></div>`;
     bar.hidden = false;
     $("#retryNow").onclick = async () => {
       $("#retryNow").innerHTML = `<span class="spinner"></span>`;
-      await flush();
+      await Promise.all([flush(), flushSvc()]);
       updateNetbar();
     };
   } else if (!navigator.onLine) {
@@ -132,9 +146,16 @@ async function boot() {
     route();
   });
   onDraftsChange(updateNetbar);
+  onSvcChange(updateNetbar);
   onSent((d, res) => {
     if (!res.duplicate) toast(`${d.truckCode} inspection uploaded ✓`);
     // Lists drawn before the upload finished are now out of date.
+    if (current === home || current === truck) route();
+  });
+  onSvcSent((d, res) => {
+    // Edits are sent while the form waits; only background uploads of new entries need a heads-up.
+    if (d.entryId) return;
+    if (!res.duplicate) toast(`${d.truckCode} maintenance uploaded ✓`);
     if (current === home || current === truck) route();
   });
   window.addEventListener("online", updateNetbar);
@@ -143,7 +164,7 @@ async function boot() {
 
   await route();
   updateNetbar();
-  if (state.user) flush();
+  if (state.user) { flush(); flushSvc(); }
 }
 
 boot();

@@ -7,7 +7,7 @@ import { HttpError } from "./http.ts";
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>;
 
-export type Role = "crew" | "supervisor" | "admin";
+export type Role = "crew" | "shop" | "supervisor" | "admin";
 export interface SessionUser {
   id: number;
   name: string;
@@ -23,7 +23,8 @@ declare module "fastify" {
 }
 
 export const COOKIE = "gc_session";
-const RANK: Record<Role, number> = { crew: 1, supervisor: 2, admin: 3 };
+// The shop manager ranks with crew; the extra things a shop user can do are granted per route (requireRole's `also`).
+const RANK: Record<Role, number> = { crew: 1, shop: 1, supervisor: 2, admin: 3 };
 const SCRYPT = { N: 16384, r: 8, p: 1 };
 
 // ---------- Secrets (PINs and passwords) ----------
@@ -136,10 +137,13 @@ export function requireUser(req: FastifyRequest): SessionUser {
   return req.user;
 }
 
-export function requireRole(role: Role) {
+/** `role` or higher may pass, plus any role listed in `also` (e.g. requireRole("supervisor", "shop")). */
+export function requireRole(role: Role, ...also: Role[]) {
   return async (req: FastifyRequest) => {
     const u = requireUser(req);
-    if (RANK[u.role] < RANK[role]) throw new HttpError(403, `Only a ${role} can do that.`);
+    if (RANK[u.role] < RANK[role] && !also.includes(u.role)) {
+      throw new HttpError(403, `Only a ${[role, ...also].join(" or ")} can do that.`);
+    }
   };
 }
 

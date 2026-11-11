@@ -2,11 +2,19 @@
 import { api } from "../api.js";
 import { openMenu } from "../app.js";
 import { allDrafts } from "../drafts.js";
-import { atLeast, errorHtml, homeHeader, stale, state } from "../ui.js";
+import { atLeast, can, errorHtml, homeHeader, stale, state } from "../ui.js";
 import { $, daysAgo, esc, fmtDate, vehicleInfo } from "../util.js";
-import { inspectionRow } from "./common.js";
+import { inspectionRow, serviceRow } from "./common.js";
 
 let query = "";
+
+/** Recent inspections, plus recent maintenance for those who can see it (first, for the shop manager). */
+function recentBlocks() {
+  const insp = `<h2>Recent inspections</h2><div class="card list" id="recent"><div class="empty">Loading…</div></div>`;
+  if (!can.seeService()) return insp;
+  const svc = `<h2>Recent maintenance</h2><div class="card list" id="recentSvc"><div class="empty">Loading…</div></div>`;
+  return state.user.role === "shop" ? svc + insp : insp + svc;
+}
 
 export async function render(app) {
   const nav = state.nav;
@@ -15,15 +23,21 @@ export async function render(app) {
     <input class="search" id="q" type="search" placeholder="Search truck, plate, VIN…" value="${esc(query)}" autocomplete="off" aria-label="Search trucks">
     <div id="review"></div>
     <h2>Pick a truck</h2><div id="trucks"><div class="empty">Loading trucks…</div></div>
-    <h2>Recent inspections</h2><div class="card list" id="recent"><div class="empty">Loading…</div></div>`;
+    ${recentBlocks()}`;
 
-  const [vehicles, recent, drafts, unreviewed] = await Promise.all([
+  const [vehicles, recent, drafts, unreviewed, recentSvc] = await Promise.all([
     api("/vehicles").catch((e) => e),
     api("/inspections?limit=15").catch((e) => e),
     allDrafts().catch(() => []),
     atLeast("supervisor") ? api("/inspections?status=submitted&limit=100").catch((e) => e) : null,
+    can.seeService() ? api("/service-logs?limit=10").catch((e) => e) : null,
   ]);
   if (stale(nav)) return;
+  if (recentSvc) {
+    $("#recentSvc").innerHTML = recentSvc instanceof Error
+      ? errorHtml(recentSvc)
+      : recentSvc.length ? recentSvc.map((s) => serviceRow(s, { showTruck: true })).join("") : `<div class="empty">No maintenance logged yet.</div>`;
+  }
 
   const draftBy = new Map(drafts.map((d) => [d.vehicleId, d]));
 

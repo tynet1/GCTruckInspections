@@ -1,6 +1,18 @@
 // Bits of markup shared between screens.
 import { api } from "../api.js";
-import { esc, fmtDate, fmtNum, modal, toast } from "../util.js";
+import { esc, fmtDate, fmtMoney, fmtNum, modal, toast } from "../util.js";
+
+/** One row in a maintenance list (truck page, home). */
+export function serviceRow(s, { showTruck = false } = {}) {
+  return `<a class="item${s.voided ? " voided" : ""}" href="#/service/${esc(s.id)}">
+    <span class="grow">${showTruck ? `<b>${esc(s.truck_code)}</b> · ` : ""}${fmtDate(s.service_date)} · ${esc(s.category_label)}
+      <span class="small muted clip">${esc(s.description)}${s.mileage != null ? ` · ${fmtNum(s.mileage)} mi` : ""}</span></span>
+    <span class="row" style="justify-content:flex-end;flex-wrap:nowrap">
+      ${s.voided ? `<span class="pill grey">Voided</span>` : ""}
+      ${s.cost != null && !s.voided ? `<span class="small muted">${fmtMoney(s.cost)}</span>` : ""}
+      ${s.repair_count ? `<span class="pill okk">${s.repair_count} fixed</span>` : ""}
+    </span></a>`;
+}
 
 /** Supervisor marks a repair item as fixed. Resolves true when saved. */
 export function resolveRepair(itemId, label) {

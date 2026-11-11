@@ -409,7 +409,7 @@ export default async function inspectionRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.post("/inspection-items/:id/resolve", { preHandler: requireRole("supervisor") }, async (req) => {
+  app.post("/inspection-items/:id/resolve", { preHandler: requireRole("supervisor", "shop") }, async (req) => {
     const id = idParam(req.params);
     const b = obj(req.body ?? {});
     const note = reqStr(b.note, "Resolution note", 1000);

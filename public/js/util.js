@@ -24,6 +24,8 @@ export function fmtDate(s) {
 }
 
 export const fmtNum = (n) => (n == null || n === "" ? "" : Number(n).toLocaleString("en-US"));
+export const fmtMoney = (n) => (n == null || n === ""
+  ? "" : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 
 export function daysAgo(dateStr) {
   if (!dateStr) return null;

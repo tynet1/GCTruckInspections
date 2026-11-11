@@ -19,10 +19,16 @@ on the phone and upload when signal returns.
 | Offline: draft autosaves to the phone (IndexedDB); uploads retry with backoff; "Saved on phone, not yet uploaded"; duplicate-proof submit (`client_id`) | done |
 | Inspection detail: repairs first, pins, photo gallery, full checklist, supervisor sign-off, resolve repairs | done |
 | PDF export matching the paper form (page 1 sheet, page 2 trailer + signatures, photo pages) | done |
-| Admin: users and PINs, trucks and diagrams | basic (polish is phase 2) |
-| Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | written, **not yet run on a VM** |
+| Admin: users and PINs, trucks (every header field, trailer type, diagram), branding (name, color, logo) | done |
+| Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | written, **not yet run** |
 
-Phase 2 (not started): repairs board, batch PDF/CSV export, checklist editor, polished admin.
+## Phase 2 (in progress)
+
+| Area | Status |
+|---|---|
+| Maintenance log for the shop manager (`shop` role): log work per truck with mileage, parts, cost, photos; close inspection repairs; next-due mileage/date; edit history; void instead of delete; works offline | done |
+| Fleet management (lease details, statuses, lease-return prep, trailers as assets) | waiting on scope answers (SPEC §9) |
+| Batch PDF export as separate PDFs, CSV export, repairs board, checklist editor | not started |
 
 ## Layout
 

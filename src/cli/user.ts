@@ -31,7 +31,7 @@ try {
     console.table(rows);
   } else if (cmd === "add") {
     if (!values.name) fail("--name is required");
-    if (!["crew", "supervisor", "admin"].includes(values.role!)) fail("--role must be crew, supervisor or admin");
+    if (!["crew", "shop", "supervisor", "admin"].includes(values.role!)) fail("--role must be crew, shop, supervisor or admin");
     if (values.pin && !PIN_RE.test(values.pin)) fail("--pin must be 4 to 6 digits");
     if (values.password) {
       const err = checkPassword(values.password);

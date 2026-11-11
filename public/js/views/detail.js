@@ -1,7 +1,7 @@
 // Inspection detail: everything submitted, repairs first, supervisor sign-off and PDF export.
 import { api } from "../api.js";
 import { setupSig } from "../sig.js";
-import { atLeast, errorHtml, setHeader, stale, state } from "../ui.js";
+import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, esc, fmtDate, fmtNum, lightbox, toast, vehicleInfo } from "../util.js";
 import { resolveRepair, SECTION_TITLES } from "./common.js";
 
@@ -67,7 +67,7 @@ export async function render(app, id) {
         ${r.note ? `<div>${esc(r.note)}</div>` : ""}
         ${r.resolved_at ? `<div class="small" style="color:var(--ok)">✓ Resolved ${fmtDate(r.resolved_at)}${r.resolved_by_name ? ` by ${esc(r.resolved_by_name)}` : ""}: ${esc(r.resolution_note)}</div>` : ""}
         ${thumbs(i.photos.filter((p) => p.inspection_item_id === r.id))}</div>
-        ${isSup && !r.resolved_at ? `<button class="secondary" data-resolve="${r.id}" data-label="${esc(r.label)}">Resolve</button>` : ""}</div></li>`).join("")}</ul>`
+        ${can.resolveRepairs() && !r.resolved_at ? `<button class="secondary" data-resolve="${r.id}" data-label="${esc(r.label)}">Resolve</button>` : ""}</div></li>`).join("")}</ul>`
     : `<span class="muted">Everything marked OK.</span>`}</div>`;
 
   const dia = (url, list) => `<div class="diagram ro"><img src="${esc(url)}" alt="">${list.map((m) => `<span class="pin" style="left:${m.x * 100}%;top:${m.y * 100}%">${m.seq}</span>`).join("")}</div>

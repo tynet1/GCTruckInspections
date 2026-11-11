@@ -7,8 +7,16 @@ export const state = {
   nav: 0,       // bumps on every route change; async renders check it before touching the DOM
 };
 
-const RANK = { crew: 1, supervisor: 2, admin: 3 };
+const RANK = { crew: 1, shop: 1, supervisor: 2, admin: 3 };
 export const atLeast = (role) => !!state.user && RANK[state.user.role] >= RANK[role];
+const isRole = (...roles) => !!state.user && roles.includes(state.user.role);
+
+/** What the signed-in user may do (the server checks the same rules). */
+export const can = {
+  seeService: () => atLeast("supervisor") || isRole("shop"),
+  logService: () => isRole("shop", "admin"),
+  resolveRepairs: () => atLeast("supervisor") || isRole("shop"),
+};
 
 /** True if the user has navigated away since `nav` was captured. */
 export const stale = (nav) => nav !== state.nav;

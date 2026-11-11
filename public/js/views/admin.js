@@ -5,6 +5,12 @@ import { errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, modal, shrinkImage, toast, vehicleInfo } from "../util.js";
 
 const TABS = { users: "Users & PINs", trucks: "Trucks", branding: "Branding" };
+const ROLE_LABELS = {
+  crew: "crew (inspections)",
+  shop: "shop (maintenance log)",
+  supervisor: "supervisor (sign-off)",
+  admin: "admin (everything)",
+};
 
 export async function render(app, tab = "users", editId = null) {
   const nav = state.nav;
@@ -38,7 +44,8 @@ async function usersTab(nav) {
         ${u.locked ? `<span class="pill bad">Locked</span>` : ""}
         ${u.active ? "" : `<span class="pill bad">Inactive</span>`}
       </span></button>`).join("") || `<div class="empty">No users.</div>`}</div>
-    <p class="small muted">Crew sign in by picking their name and entering a 4–6 digit PIN. Supervisors and admins sign in with email and password.
+    <p class="small muted">Anyone with a PIN signs in by picking their name and entering it (crew, and usually the shop manager).
+      Supervisors and admins sign in with email and password. The shop role can log maintenance and close repairs, but can't sign off inspections.
       Too many wrong tries locks an account for 15 minutes; setting a new PIN or password unlocks it.</p>`;
   $("#addUser").onclick = () => userEditor(null, () => usersTab(nav));
   box.querySelectorAll("[data-user]").forEach((b) => (b.onclick = () => userEditor(users.find((u) => u.id === Number(b.dataset.user)), () => usersTab(nav))));
@@ -51,7 +58,7 @@ function userEditor(u, onSaved) {
     <div class="fields">
       <div><label class="f" for="uName">Name (as crew will see it)</label><input class="t" id="uName" value="${esc(u.name)}" autocomplete="off"></div>
       <div><label class="f" for="uRole">Role</label><select class="t" id="uRole">
-        ${["crew", "supervisor", "admin"].map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}</select></div>
+        ${Object.entries(ROLE_LABELS).map(([r, label]) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></div>
       <div><label class="f" for="uPin">${isNew ? "PIN (4–6 digits)" : `New PIN${u.has_pin ? " (blank = keep)" : ""}`}</label>
         <input class="t" id="uPin" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off"></div>
       <div><label class="f" for="uEmail">Email (supervisor/admin)</label><input class="t" id="uEmail" type="email" value="${esc(u.email || "")}" autocomplete="off" autocapitalize="off"></div>

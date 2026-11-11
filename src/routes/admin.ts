@@ -7,7 +7,7 @@ import { isDiagramKind } from "../diagrams.ts";
 import { files, imageType, newKey } from "../storage.ts";
 import { vehicleRows } from "./vehicles.ts";
 
-const ROLES: Role[] = ["crew", "supervisor", "admin"];
+const ROLES: Role[] = ["crew", "shop", "supervisor", "admin"];
 
 function pgUnique(e: unknown, msg: string): never {
   if ((e as { code?: string }).code === "23505") throw conflict(msg);
@@ -27,7 +27,7 @@ export default async function adminRoutes(app: FastifyInstance) {
     const out: Record<string, unknown> = {};
     if (creating || b.name !== undefined) out.name = reqStr(b.name, "Name", 100);
     if (creating || b.role !== undefined) {
-      if (!ROLES.includes(b.role as Role)) throw bad("Role must be crew, supervisor or admin.");
+      if (!ROLES.includes(b.role as Role)) throw bad("Role must be crew, shop, supervisor or admin.");
       out.role = b.role;
     }
     if (b.email !== undefined) {

@@ -49,7 +49,8 @@ export async function photoBlob(id) {
 }
 
 const inflight = new Map();
-function uploadPhoto(id) {
+/** Upload one photo from this phone's store (shared with maintenance entries). */
+export function uploadPhoto(id) {
   if (inflight.has(id)) return inflight.get(id);
   const p = (async () => {
     const blob = await photoBlob(id);

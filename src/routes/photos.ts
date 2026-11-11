@@ -50,10 +50,14 @@ export default async function photoRoutes(app: FastifyInstance) {
   });
 }
 
-/** Delete photos that were uploaded but never attached to a submitted inspection. */
+/**
+ * Delete photos that were uploaded but never attached to an inspection or a maintenance entry.
+ * (A phone that was offline longer than this still has the photo and uploads it again.)
+ */
 export async function cleanupOrphanPhotos(log: (m: string) => void): Promise<void> {
   const rows = await q(
-    `DELETE FROM photos WHERE inspection_id IS NULL AND created_at < now() - make_interval(days => $1)
+    `DELETE FROM photos
+      WHERE inspection_id IS NULL AND service_log_id IS NULL AND created_at < now() - make_interval(days => $1)
      RETURNING file_path`,
     [config.photo.orphanDays],
   );

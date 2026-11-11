@@ -1,27 +1,36 @@
 // IndexedDB wrapper for drafts and photo blobs. Falls back to memory if IndexedDB is unavailable
 // (then drafts won't survive closing the browser, and the app says so).
+//
+// Version 2 adds the "svc" store (maintenance entry drafts). Upgrading only creates missing
+// stores, so inspection drafts and photos saved by version 1 are kept.
 
 const DB_NAME = "gc-inspections";
-const STORES = { drafts: "vehicleId", blobs: "id" };
+const DB_VERSION = 2;
+const STORES = { drafts: "vehicleId", blobs: "id", svc: "key" };
 
 let dbp = null;
-let memory = null; // { drafts: Map, blobs: Map } when IndexedDB can't be used
+let memory = null; // { drafts: Map, blobs: Map, svc: Map } when IndexedDB can't be used
 
 function open() {
   if (dbp) return dbp;
   dbp = new Promise((resolve, reject) => {
     if (!("indexedDB" in window)) return reject(new Error("no indexedDB"));
-    const r = indexedDB.open(DB_NAME, 1);
+    const r = indexedDB.open(DB_NAME, DB_VERSION);
     r.onupgradeneeded = () => {
       for (const [name, keyPath] of Object.entries(STORES)) {
         if (!r.result.objectStoreNames.contains(name)) r.result.createObjectStore(name, { keyPath });
       }
     };
-    r.onsuccess = () => resolve(r.result);
+    r.onsuccess = () => {
+      // If a newer copy of the app opens a newer version in another tab, let it upgrade.
+      r.result.onversionchange = () => { r.result.close(); dbp = null; };
+      resolve(r.result);
+    };
     r.onerror = () => reject(r.error);
+    r.onblocked = () => console.warn("IndexedDB upgrade is waiting for another tab of this app to close");
   }).catch((e) => {
     console.warn("IndexedDB unavailable, keeping drafts in memory only", e);
-    memory = { drafts: new Map(), blobs: new Map() };
+    memory = { drafts: new Map(), blobs: new Map(), svc: new Map() };
     return null;
   });
   return dbp;
