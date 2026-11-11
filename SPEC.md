@@ -53,11 +53,16 @@ Tunnel, which needs a domain on Tyler's Cloudflare account.
 
 1. **Sign in:** name picker + PIN pad, or email/password for supervisors and admins.
 2. **Home / pick a truck:** searchable list of trucks (code, year/make/model, plate, VIN). Each shows badges for last inspection date (warn if over 35 days), open repair count, draft in progress, and registration expired.
-3. **Truck page:** header info, Start/Resume inspection, open repairs from all past inspections, and inspection history.
+3. **Truck page:** header info, Start/Resume inspection, open repairs from all past inspections, **damage on file** (the
+   truck picture with every damage mark from every inspection, numbered oldest first, and a list newest first with the date,
+   a link to the inspection and its photos), and inspection history.
 4. **Inspection form** (same order as the paper sheet):
    - Truck header (read-only)
    - Date (default today), inspector name (default signed-in user), mileage (numeric keypad), oil change due Yes/No
-   - **Damage diagram:** tap to drop a numbered pin and describe it. Pins from the previous inspection show as grey dots for reference. A photo can be attached to a pin.
+   - **Damage diagram:** tap to drop a numbered pin and describe it. All damage already on file (every pin from every earlier inspection, since crews only mark new damage) shows as grey
+     dots. A "Damage already on file" list under the picture shows each one's description and date; tapping one darkens and
+     numbers its dot, so crews don't mark the same damage twice. Pins drawn on a picture the truck no longer uses are left off
+     the form (still listed on the truck page). A photo can be attached to a pin.
    - Existing notes (prefilled from the previous inspection's notes and observations) and New observations
    - Checklist sections, Exterior (16) and Interior (16). Each item has big OK / Repair buttons; Repair requires a short note and allows a photo. "Mark rest OK" per section.
    - Trailer switch (defaults on if the truck usually pulls a trailer). When on: trailer number/plate, trailer diagram with pins, and the Trailer & crew checklist (17).
@@ -141,8 +146,8 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 POST /auth/pin            {user_id, pin}
 POST /auth/login          {email, password}
 GET  /vehicles            -> vehicle_status rows
-GET  /vehicles/:id        -> vehicle + open repairs + history
-GET  /vehicles/:id/last   -> last inspection (to prefill notes and grey pins)
+GET  /vehicles/:id        -> vehicle + open repairs + history + damage on file (with photos)
+GET  /vehicles/:id/last   -> last inspection (to prefill notes) + all damage on file that fits today's picture (grey pins)
 POST /photos              multipart -> {id}   (before submit; orphan cleanup after 7 days)
 POST /inspections         {client_id, ..., items[], damage[], photo_ids[]}
 GET  /inspections?limit&status&vehicle_id&from&to   (from/to: inclusive inspection dates, YYYY-MM-DD)
@@ -205,6 +210,6 @@ POST /service-logs/:id/void         {reason}                                    
 - [ ] A crew lead on an iPhone in Safari can sign in, complete an AZ018 inspection with 3 damage pins and 4 photos, and submit in under 5 minutes.
 - [ ] Turning Wi-Fi/cell off mid-form loses nothing; the submit succeeds when signal returns, and a double tap on Save creates one record.
 - [ ] A supervisor can sign off, and the PDF matches the paper layout, including pins, photos and both signatures.
-- [ ] The next inspection on that truck shows the previous pins as grey dots and prefills the notes.
+- [ ] The next inspection on that truck shows all earlier damage as grey dots and prefills the notes.
 - [x] `docker compose up -d` (on Tyler's PC with Docker Desktop for now) brings everything up; a restore from backup is tested once.
   (2026-11-11: stack running; full flow, PDFs, backup, restore and undo checked on a throwaway copy of the stack.)

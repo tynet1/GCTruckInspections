@@ -289,8 +289,39 @@ if (!url) {
     test("last inspection feeds the next form (notes and grey pins)", async () => {
       const last = (await inject("GET", `/vehicles/${vehicleId}/last`, { cookie: crewCookie })).json();
       assert.equal(last.inspection.existing_notes, "Scratch on tailgate");
-      assert.equal(last.damage.length, 1);
+      assert.ok(last.damage.length >= 1);
       assert.equal(last.damage[0].diagram, "truck");
+    });
+
+    test("grey pins are all damage on file from every earlier inspection, not just the last one", async () => {
+      const truck = await one(`SELECT id FROM vehicles WHERE truck_code = 'AZ002'`);
+      const submit = async (date: string, damage: unknown[], photos: unknown[] = []) => {
+        const res = await inject("POST", "/inspections", {
+          cookie: crewCookie, body: submitBody({ vehicle_id: truck.id, inspection_date: date, mileage: 30000, damage, photos }),
+        });
+        assert.equal(res.statusCode, 201, res.body);
+        return res.json().id as string;
+      };
+      const { id: photoId } = await uploadPhoto(crewCookie);
+      const first = await submit("2026-09-01",
+        [{ key: "d1", diagram: "truck", x: 0.1, y: 0.2, note: "Cracked bumper" }],
+        [{ id: photoId, caption: "Bumper", damage_key: "d1" }]);
+      const second = await submit("2026-10-01", [{ key: "d2", diagram: "truck", x: 0.6, y: 0.7, note: "Door ding" }]);
+      await submit("2026-11-01", []); // the latest inspection marked nothing new
+
+      const last = (await inject("GET", `/vehicles/${truck.id}/last`, { cookie: crewCookie })).json();
+      assert.deepEqual(
+        last.damage.map((m: { n: number; note: string; inspection_id: string; inspection_date: string }) =>
+          [m.n, m.note, m.inspection_id, m.inspection_date]),
+        [[1, "Cracked bumper", first, "2026-09-01"], [2, "Door ding", second, "2026-10-01"]],
+        "both earlier marks, numbered oldest first, even though the last inspection had none",
+      );
+
+      const page = (await inject("GET", `/vehicles/${truck.id}`, { cookie: crewCookie })).json();
+      assert.equal(page.damage.length, 2);
+      assert.equal(page.damage[0].on_current_diagram, true);
+      assert.deepEqual(page.damage[0].photos.map((p: { id: string }) => p.id), [photoId]);
+      assert.deepEqual(page.damage[1].photos, []);
     });
 
     test("crew can't sign off; supervisor can, once", async () => {
@@ -345,7 +376,7 @@ if (!url) {
         assert.equal(res.statusCode, 200, res.body);
         return res.json() as { id: string; inspection_date: string }[];
       };
-      const oct = await list("from=2026-10-01&to=2026-10-31");
+      const oct = await list(`from=2026-10-01&to=2026-10-31&vehicle_id=${vehicleId}`);
       assert.deepEqual(oct.map((r) => r.id).sort(), [...ids].sort(), "both ends of the range are included");
       assert.deepEqual((await list("from=2026-10-20")).filter((r) => ids.includes(r.id)).map((r) => r.id), [ids[1]]);
       assert.deepEqual((await list(`to=2026-10-20&vehicle_id=${vehicleId}`)).map((r) => r.id), [ids[0]]);
@@ -393,6 +424,9 @@ if (!url) {
       assert.equal(oldDetail.truck_diagram_url, "/diagrams/az018-truck.jpg", "old pins stay on the old picture");
       const last = (await inject("GET", `/vehicles/${vehicleId}/last`, { cookie: crewCookie })).json();
       assert.equal(last.damage.length, 0, "grey pins from a different picture are not shown");
+      const page = (await inject("GET", `/vehicles/${vehicleId}`, { cookie: crewCookie })).json();
+      assert.ok(page.damage.length > 0, "the truck page still lists them");
+      assert.ok(page.damage.every((m: { on_current_diagram: boolean }) => !m.on_current_diagram));
 
       // A new inspection with the trailer records the trailer type.
       const sub = submitBody({

@@ -15,7 +15,7 @@ on the phone and upload when signal returns.
 | Sign in: crew name + PIN (30-day session), supervisor/admin email + password, lockout after 5 wrong tries | done |
 | Home: search trucks; badges for last inspection (amber over 35 days), open repairs, draft, registration expired | done |
 | Truck page: start/resume, open repairs from all inspections, history | done |
-| Inspection form: same order as paper; damage pins with grey dots from last time; photos on pins and repairs; trailer section; finger signature; save bar lists what's missing | done |
+| Inspection form: same order as paper; damage pins, with all damage already on file shown as grey dots and listed; photos on pins and repairs; trailer section; finger signature; save bar lists what's missing | done |
 | Offline: draft autosaves to the phone (IndexedDB); uploads retry with backoff; "Saved on phone, not yet uploaded"; duplicate-proof submit (`client_id`) | done |
 | Inspection detail: repairs first, pins, photo gallery, full checklist, supervisor sign-off, resolve repairs | done |
 | PDF export matching the paper form (page 1 sheet, page 2 trailer + signatures, photo pages) | done |

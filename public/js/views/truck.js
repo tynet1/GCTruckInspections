@@ -3,15 +3,16 @@ import { api } from "../api.js";
 import { deleteDraft, flush, getDraft, sendQueued } from "../drafts.js";
 import { flushSvc, getSvcDraft, sendSvc } from "../svc.js";
 import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
-import { $, confirmBox, esc, fmtDate, fmtNum, toast, vehicleInfo } from "../util.js";
+import { $, confirmBox, esc, fmtDate, fmtNum, lightbox, toast, vehicleInfo } from "../util.js";
 import { inspectionRow, repairButtons, resolveRepair, SECTION_TITLES, serviceRow } from "./common.js";
 
 let showAllService = false;
+let showAllDamage = false;
 let lastTruck = null;
 
 export async function render(app, id) {
   const nav = state.nav;
-  if (id !== lastTruck) { showAllService = false; lastTruck = id; }
+  if (id !== lastTruck) { showAllService = false; showAllDamage = false; lastTruck = id; }
   setHeader({ title: "Truck", back: "#/" });
   app.innerHTML = `<div class="empty">Loading…</div>`;
   let data, draft, svc, svcDraft;
@@ -59,6 +60,7 @@ export async function render(app, id) {
         ${r.note ? `<div>${esc(r.note)}</div>` : ""}<a class="small" href="#/inspection/${esc(r.inspection_id)}">From ${fmtDate(r.inspection_date)} inspection</a></div>
         ${repairButtons(r, v.id, who)}</div></li>`).join("")}</ul>`
     : `<span class="muted">No open repairs.</span>`}</div>`;
+  h += damageSection(v, data.damage || []);
   if (svc) h += serviceSection(v, svc, svcDraft);
   h += `${atLeast("supervisor") && history.length
     ? `<div class="h2row"><h2>Inspection history</h2><a class="link" href="#/export?truck=${v.id}">Export PDFs</a></div>`
@@ -89,6 +91,9 @@ export async function render(app, id) {
   }));
   const ma = $("#svcMore");
   if (ma) ma.onclick = () => { showAllService = true; render(app, id); };
+  const dm = $("#dmgMore");
+  if (dm) dm.onclick = () => { showAllDamage = true; render(app, id); };
+  app.querySelectorAll("[data-lb]").forEach((img) => (img.onclick = () => lightbox(img.src, img.dataset.cap)));
   const ss = $("#svcSend");
   if (ss) ss.onclick = async () => {
     ss.disabled = true;
@@ -99,6 +104,37 @@ export async function render(app, id) {
     flushSvc();
     if (!stale(nav)) render(app, id);
   };
+}
+
+/**
+ * Every damage mark from every inspection of this truck: the picture with all of them numbered (1 = oldest),
+ * then the list, newest first. Marks drawn on a picture the truck no longer uses are listed but not drawn.
+ */
+function damageSection(v, damage) {
+  const parts = [];
+  for (const kind of ["truck", "trailer"]) {
+    const list = damage.filter((m) => m.diagram === kind);
+    if (!list.length) continue;
+    const url = kind === "truck" ? v.diagram_url : v.trailer_diagram_url;
+    const drawn = list.filter((m) => m.on_current_diagram);
+    const newest = [...list].reverse();
+    const shown = showAllDamage ? newest : newest.slice(0, 5);
+    const label = (m) => `${kind === "trailer" ? "Trailer damage" : "Damage"} ${m.n}${m.note ? `: ${m.note}` : ""}`;
+    parts.push(`${kind === "trailer" ? `<div class="subhead">Trailer${v.trailer_type ? ` (${esc(v.trailer_type)})` : ""}</div>` : ""}
+      ${url && drawn.length ? `<div class="diagram ro"><img src="${esc(url)}" alt="${kind} damage on file">${drawn.map((m) =>
+        `<span class="pin hist" style="left:${m.x * 100}%;top:${m.y * 100}%">${m.n}</span>`).join("")}</div>` : ""}
+      <ul class="dmglist">${shown.map((m) => `<li><span class="ofn">${m.n}</span><div class="grow">
+        <b>${esc(m.note || "(no description)")}</b>
+        <div class="small muted"><a href="#/inspection/${esc(m.inspection_id)}">Marked ${fmtDate(m.inspection_date)}</a>${
+          kind === "trailer" && m.trailer_number ? ` · trailer ${esc(m.trailer_number)}` : ""}${
+          m.on_current_diagram ? "" : " · drawn on an earlier picture, not shown above"}</div>
+        ${m.photos.length ? `<div class="row" style="margin-top:4px">${m.photos.map((p) =>
+          `<img class="dmgthumb" src="/api/photos/${esc(p.id)}" data-lb="${esc(p.id)}" data-cap="${esc([label(m), p.caption].filter(Boolean).join(" — "))}" alt="Photo of damage ${m.n}">`).join("")}</div>` : ""}
+      </div></li>`).join("")}</ul>
+      ${list.length > shown.length ? `<button class="link" id="dmgMore" style="width:100%">Show all ${list.length}</button>` : ""}`);
+  }
+  return `<h2>Damage on file (${damage.length})</h2><div class="card">${parts.length
+    ? parts.join("") : `<span class="muted">No damage marked on any inspection yet.</span>`}</div>`;
 }
 
 function serviceSection(v, svc, svcDraft) {

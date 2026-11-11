@@ -7,13 +7,15 @@ import {
 import { idb } from "../idb.js";
 import { setupSig } from "../sig.js";
 import { errorHtml, setHeader, stale, state } from "../ui.js";
-import { $, $$, debounce, esc, fmtNum, shrinkImage, toast, today, uuid, vehicleInfo } from "../util.js";
+import { $, $$, debounce, esc, fmtDate, fmtNum, shrinkImage, toast, today, uuid, vehicleInfo } from "../util.js";
 import { SECTION_TITLES } from "./common.js";
 
 let d = null;   // the draft being edited
 let ctx = null; // { vehicle, sections, trailerDiagramUrl, prevDamage, prevMileage, app }
 let sigPad = null;
 let saving = false;
+let onFileHl = null;         // "truck-3": the on-file damage mark picked in the list, shown dark on the picture
+const onFileOpen = {};       // whether the "Damage already on file" list is open, per picture (kept across redraws)
 const blobUrls = new Map();
 const persist = debounce(() => { if (d && d.touched) saveDraft(d); }, 400);
 const onVis = () => { if (document.visibilityState === "hidden") persist.flush(); };
@@ -28,6 +30,8 @@ function changed() {
 
 export async function render(app, vehicleId) {
   const nav = state.nav;
+  onFileHl = null;
+  for (const k of Object.keys(onFileOpen)) delete onFileOpen[k];
   setHeader({ title: "New inspection", back: `#/truck/${vehicleId}` });
   app.innerHTML = `<div class="empty">Loading…</div>`;
   let vehicle, config, last;
@@ -170,11 +174,20 @@ function diagramHtml(kind) {
   const src = kind === "truck" ? ctx.vehicle.diagram_url : ctx.trailerDiagramUrl;
   if (!src) return `<div class="empty">No diagram on file. Describe damage in the notes.</div>`;
   const pins = d.damage.filter((m) => m.diagram === kind);
-  const old = ctx.prevDamage.filter((m) => m.diagram === kind);
+  // `n` comes from the server; a copy cached by an older version of the app may not have it.
+  const old = ctx.prevDamage.filter((m) => m.diagram === kind).map((m, i) => ({ ...m, n: m.n ?? i + 1 }));
+  const key = (p) => `${kind}-${p.n}`;
   return `<div class="diagram" data-dia="${kind}"><img src="${esc(src)}" alt="${kind} diagram" draggable="false">
-      ${old.map((p) => `<span class="pin old" style="left:${p.x * 100}%;top:${p.y * 100}%"></span>`).join("")}
+      ${old.map((p) => `<span class="pin old${onFileHl === key(p) ? " hl" : ""}" data-old="${key(p)}" style="left:${p.x * 100}%;top:${p.y * 100}%">${p.n}</span>`).join("")}
       ${pins.map((p, i) => `<span class="pin" style="left:${p.x * 100}%;top:${p.y * 100}%">${i + 1}</span>`).join("")}</div>
-    <div class="small muted" style="margin-top:6px">Tap the picture where there's new damage.${old.length ? " Grey dots = damage marked last time." : ""}</div>
+    <div class="small muted" style="margin-top:6px">Tap the picture where there's new damage.${old.length ? " Grey dots = damage already on file from earlier inspections." : ""}</div>
+    ${old.length ? `<details class="onfile" data-onfile="${kind}"${onFileOpen[kind] ? " open" : ""}>
+      <summary>Damage already on file (${old.length})</summary>
+      <div class="small muted" style="margin:2px 0 4px">Tap one to find it on the picture. Don't mark it again unless it got worse.</div>
+      ${[...old].reverse().map((p) => `<button type="button" class="ofrow${onFileHl === key(p) ? " on" : ""}" data-hl="${key(p)}">
+        <span class="ofn">${p.n}</span><span class="grow">${esc(p.note || "(no description)")}
+        ${p.inspection_date ? `<span class="small muted" style="display:block">Marked ${fmtDate(p.inspection_date)}</span>` : ""}</span></button>`).join("")}
+    </details>` : ""}
     <div class="pinlist">${pins.map((p, i) => {
       const n = d.photos.filter((ph) => ph.damageKey === p.key).length;
       return `<div class="p"><span class="num">${i + 1}</span>
@@ -305,6 +318,21 @@ function bind() {
 
   app.onclick = (e) => {
     const t = e.target;
+    const sum = t.closest(".onfile > summary");
+    if (sum) {
+      // Fires before the browser toggles it, so the new state is the opposite of .open.
+      const box = sum.parentElement;
+      onFileOpen[box.dataset.onfile] = !box.open;
+      return;
+    }
+    const hl = t.closest("[data-hl]");
+    if (hl) {
+      onFileHl = onFileHl === hl.dataset.hl ? null : hl.dataset.hl;
+      $$("[data-old]").forEach((el) => el.classList.toggle("hl", el.dataset.old === onFileHl));
+      $$("[data-hl]").forEach((el) => el.classList.toggle("on", el.dataset.hl === onFileHl));
+      if (onFileHl) $(`[data-old="${onFileHl}"]`)?.closest(".diagram")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      return;
+    }
     const oil = t.closest("[data-oil]");
     if (oil) {
       d.oil = oil.dataset.oil;
