@@ -1,4 +1,5 @@
 import type { Browser } from "playwright";
+import { getBranding } from "./branding.ts";
 import { readDiagram } from "./diagrams.ts";
 import { files } from "./storage.ts";
 
@@ -66,9 +67,12 @@ export function buildInspectionHtml(d: Data, assets: {
   truckDiagram: string | null; trailerDiagram: string | null;
   employeeSig: string | null; supervisorSig: string | null;
   photos: { src: string; caption: string }[];
+  brand: { company: string; logo: string | null };
 }): string {
   const i = d.inspection;
   const info = [i.year, i.make, i.model].filter(Boolean).join(" ");
+  const brandBar = `<div class="brand">${assets.brand.logo ? `<img src="${assets.brand.logo}" alt="">` : ""}
+    <div><b>${esc(assets.brand.company)}</b><span>Truck Inspection Sheet</span></div></div>`;
   const header = `<table class="grid hdr">
     <tr><th>Truck ID</th><td>${esc(i.truck_code)}</td><th>Unit</th><td>${esc(i.unit)}</td></tr>
     <tr><th>VIN #</th><td>${esc(i.vin)}</td><th>Plate</th><td>${esc(i.plate)}</td></tr>
@@ -83,6 +87,7 @@ export function buildInspectionHtml(d: Data, assets: {
     ? `<div class="flag">Lower than last recorded (${Number(i.previous_mileage).toLocaleString("en-US")})</div>` : "";
 
   const page1 = `<section class="page">
+    ${brandBar}
     ${header}
     <table class="grid meta">
       <tr class="sh"><th style="width:16%">Date</th><th>Name of Inspector</th><th colspan="2" style="width:17%">Oil Change Due</th><th style="width:27%">Current Mileage</th></tr>
@@ -116,6 +121,7 @@ export function buildInspectionHtml(d: Data, assets: {
         ${header}
         <table class="grid meta">
           <tr><th style="width:18%">Trailer Number</th><td class="v">${esc(i.trailer_number_text)}</td><th style="width:18%">Plate Number</th><td class="v">${esc(i.trailer_plate_text)}</td></tr>
+          ${d.trailerDiagram?.name ? `<tr><th>Trailer Type</th><td colspan="3" class="v">${esc(d.trailerDiagram.name)}</td></tr>` : ""}
           <tr><td colspan="4" class="diacell">${diagramBlock(assets.trailerDiagram, trailerMarks)}</td></tr>
         </table>
         ${checklistTable(trl.slice(0, Math.ceil(trl.length / 2)), trl.slice(Math.ceil(trl.length / 2)), "Inspection Item", "Inspection Items")}
@@ -139,6 +145,10 @@ body { margin: 0; font: 9pt/1.22 Calibri, Carlito, "Liberation Sans", Arial, san
 .page { break-after: page; }
 .page:last-of-type { break-after: auto; }
 .keep { break-inside: avoid; margin-top: 8pt; }
+.brand { display: flex; align-items: center; gap: 10pt; margin-bottom: 5pt; height: 0.36in; }
+.brand img { max-height: 0.36in; max-width: 1.6in; object-fit: contain; }
+.brand b { font-size: 12pt; margin-right: 8pt; }
+.brand span { font-size: 10pt; color: #444; letter-spacing: 0.04em; text-transform: uppercase; }
 table.grid { width: 100%; border-collapse: collapse; margin-bottom: 7pt; }
 .grid th, .grid td { border: 0.8pt solid #222; padding: 2.5pt 5pt; vertical-align: top; }
 .grid th { background: #d9d9d9; font-weight: 700; text-align: center; }
@@ -224,6 +234,8 @@ export async function renderInspectionPdf(d: Data): Promise<Buffer> {
   const trailerDia = d.trailerDiagram?.file_path ? await readDiagram(d.trailerDiagram.file_path).catch(() => null) : null;
   const emp = await safeRead(i.employee_signature_path);
   const sup = await safeRead(i.supervisor_signature_path);
+  const brand = await getBranding();
+  const logo = await safeRead(brand.logo_key);
 
   const markSeq = new Map(d.damage.map((m) => [m.id, `${m.diagram === "trailer" ? "Trailer damage" : "Damage"} ${m.seq}`]));
   const itemLabel = new Map(d.items.map((it) => [it.id, it.label]));
@@ -244,6 +256,7 @@ export async function renderInspectionPdf(d: Data): Promise<Buffer> {
     employeeSig: emp ? dataUrl(emp, "image/png") : null,
     supervisorSig: sup ? dataUrl(sup, "image/png") : null,
     photos,
+    brand: { company: brand.company_name, logo: logo ? dataUrl(logo, logo[0] === 0x89 ? "image/png" : "image/jpeg") : null },
   });
   return renderHtmlToPdf(html);
 }

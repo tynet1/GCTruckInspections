@@ -1,8 +1,8 @@
 # Grounds Control Vehicle Inspections — Build Spec
 
 Owner: Tyler Longshore (Business Systems & Technology Manager)
-Status: prototype done (see `prototype/`), production build next
-Target: self-hosted on a Linux VM (starts on Tyler's machine, moves to a company server later)
+Status: phase 1 (MVP) built, plus trailer types and branding; phase 2 scoped in §9, waiting on answers
+Target: for now, Docker Desktop on Tyler's own Windows PC, used from Tyler's phone only. Moves to a company server later.
 
 ## 1. Why
 
@@ -20,7 +20,8 @@ The app moves the same sheet onto a phone and adds damage pins, photos, signatur
 |---|---|---|
 | crew | Crew leads and drivers | Sign in with name + PIN, start or resume an inspection, upload photos, submit |
 | supervisor | Crew supervisors, fleet/shop | Everything crew can do, plus review and sign off inspections, mark repairs resolved, export PDFs |
-| admin | Tyler, COO | Everything, plus manage trucks, trailers, diagrams, checklist items and users |
+| shop (phase 2) | Shop manager | Log maintenance and repairs on any truck, close repair items with the work done; read inspections |
+| admin | Tyler, COO | Everything, plus manage trucks, trailers, diagrams, checklist items, users and branding |
 
 Crew sign-in has to be fast on a phone in a truck: pick your name, enter a 4–6 digit PIN, and the session stays signed in for about 30 days. Supervisors and admins use email + password. Microsoft 365 SSO is a later phase (see §9).
 
@@ -28,7 +29,7 @@ Crew sign-in has to be fast on a phone in a truck: pick your name, enter a 4–6
 
 - **Runtime:** Docker Compose on Ubuntu Server 24.04 VM
 - **DB:** PostgreSQL 16 (`db/schema.sql` is the starting point, already tested to load cleanly)
-- **App:** Node.js 20 + TypeScript, Fastify API. Frontend is a mobile-first web app; the prototype's plain HTML/JS UI is a fine base, or SvelteKit if the app grows. No native app.
+- **App:** Node.js 24 + TypeScript (Node 20 left support in April 2026; 24 runs the TypeScript directly), Fastify API. Frontend is a mobile-first web app; the prototype's plain HTML/JS UI is a fine base, or SvelteKit if the app grows. No native app.
 - **Photos and signatures:** files on a Docker volume (`/data/uploads/yyyy/mm/<uuid>.jpg`), path stored in Postgres. Resize on the client to max 1600px JPEG before upload, as the prototype does. Keep it behind an interface so it can move to S3 or Azure Blob later.
 - **PDF:** server-side, render an HTML print template with headless Chromium (Playwright) → PDF
 - **Reverse proxy / TLS:** Caddy
@@ -43,6 +44,10 @@ Crews are on cellular in the field, so a VM on Tyler's machine is not reachable 
 3. Port-forward and dynamic DNS: not recommended.
 
 The pilot can start on Wi-Fi at the yard if needed.
+
+**Current decision (Nov 2026):** the app runs on Tyler's PC and only Tyler's phone uses it. On the same Wi-Fi that works at
+`http://<pc-address>`. Away from that network, or for offline use (the service worker needs HTTPS), it needs the Cloudflare
+Tunnel, which needs a domain on Tyler's Cloudflare account.
 
 ## 4. Screens (all phone-first, also good on iPad)
 
@@ -63,7 +68,20 @@ The pilot can start on Wi-Fi at the yard if needed.
    - Drafts autosave on the device (IndexedDB) and survive closing the browser
 5. **Inspection detail:** everything submitted, repairs listed first, damage diagram with pins, photo gallery with full-screen view, full checklist, signatures. Supervisor sign-off happens here (name + finger signature). **Export PDF** button.
 6. **Repairs board** (supervisor): all open repair items across the fleet, filterable by truck. Mark resolved with a note, optionally linked to a service log entry.
-7. **Admin:** trucks (add, edit, retire, upload diagram), trailers, users and PINs, checklist items (add, reorder, deactivate; never hard-delete).
+7. **Admin:** trucks (add, edit every header field, retire, pick or upload the body diagram, set the trailer type or "no trailer"), trailer types (name + picture), users and PINs, branding (company name, app name, header color, logo), checklist items (add, reorder, deactivate; never hard-delete).
+
+A trailer type is a named trailer diagram. Every inspection records which truck and trailer pictures it was drawn on, so changing a truck's diagram or trailer type later never moves old pins.
+
+## 4a. Data safety (top priority)
+
+Losing an inspection, photo or log entry is the worst failure this app can have. Every change is judged against that first.
+
+- Nothing is hard-deleted from the app: trucks, users, diagrams and checklist items are retired, not removed.
+- Submitted records are read-only in the database (triggers), and corrections go in notes.
+- The phone keeps a draft until the server confirms it; submits are idempotent; uploads retry.
+- Files are written to a temp file, flushed to disk and renamed, so a crash never leaves a half-written photo.
+- Schema changes only add numbered migrations, each in one transaction.
+- Nightly backups (database + uploads) to a second location, and a restore is tested.
 
 ## 5. Business rules
 
@@ -82,7 +100,8 @@ The pilot can start on Wi-Fi at the yard if needed.
   - Page 2, if a trailer was inspected: trailer diagram, trailer checklist, comments, signatures
   - Final pages: photos, 2 per row, with captions
 - Filename: `<TruckCode>_<YYYY-MM-DD>_inspection.pdf`
-- Batch export: a date range and optional truck as one combined PDF, plus CSV export of inspections and repair items
+- The logo and company name from branding print at the top of page 1.
+- Batch export (phase 2): pick a date range and optionally trucks; download **one separate PDF per inspection** (zipped, each named like a single export), not one combined PDF. Plus CSV export of inspections and repair items.
 
 ## 7. API sketch
 
@@ -112,10 +131,22 @@ admin CRUD: /vehicles, /trailers, /diagrams, /users, /checklist-items
 
 ## 9. Phases
 
-1. **MVP (pilot with 2–3 crew leads):** auth, trucks, inspection form, photos, signatures, detail view, supervisor sign-off, single PDF export, backups, Cloudflare Tunnel
-2. Repairs board, batch PDF/CSV export, admin screens polished
-3. Service log (Frank's paper logs) linked to vehicles and repairs; pull vehicle list and odometer from **Geotab** API
-4. Microsoft 365 / Entra ID SSO for supervisors and admins; move off Tyler's machine to a company VM or Azure
+1. **MVP (built):** auth, trucks, inspection form, photos, signatures, detail view, supervisor sign-off, single PDF export, backups, Cloudflare Tunnel.
+   Added after review: full truck editor with trailer type, and branding.
+2. **Maintenance log and fleet management:**
+   - **Maintenance log** for the shop manager (new `shop` role): log service and repairs on a truck (date, mileage, work done,
+     parts, cost, who did it), close the repair items it fixes, and see each truck's full history. Replaces Frank's paper logs
+     (the `service_logs` table in 001 is the starting point).
+   - **Fleet management:** add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
+     and the rest of the truck's lifecycle. Scope to confirm with Tyler before building; proposed:
+     status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage
+     allowance), a lease-return checklist (damage repaired, keys, documents, final inspection and photos), registration and
+     insurance dates with reminders, and trailers as their own assets.
+   - **Batch PDF export as separate PDFs** (see §6), CSV export, repairs board, checklist editor.
+3. **Code review and hardening:** full code review; review and optimize performance while keeping stability; a burn-in test
+   (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
+4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins;
+   move off Tyler's machine to a company VM or Azure.
 
 ## 10. Acceptance checklist for MVP
 
@@ -123,4 +154,4 @@ admin CRUD: /vehicles, /trailers, /diagrams, /users, /checklist-items
 - [ ] Turning Wi-Fi/cell off mid-form loses nothing; the submit succeeds when signal returns, and a double tap on Save creates one record.
 - [ ] A supervisor can sign off, and the PDF matches the paper layout, including pins, photos and both signatures.
 - [ ] The next inspection on that truck shows the previous pins as grey dots and prefills the notes.
-- [ ] `docker compose up -d` on a fresh Ubuntu VM brings everything up; a restore from backup is tested once.
+- [ ] `docker compose up -d` (on Tyler's PC with Docker Desktop for now) brings everything up; a restore from backup is tested once.

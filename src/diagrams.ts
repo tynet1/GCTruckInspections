@@ -23,7 +23,25 @@ export async function readDiagram(filePath: string): Promise<{ data: Buffer; mim
   throw new Error(`Bad diagram path ${filePath}`);
 }
 
-/** The diagram used when a truck has none set, and the trailer diagram. */
-export async function defaultDiagram(kind: "truck" | "trailer"): Promise<{ id: number; file_path: string } | undefined> {
-  return one(`SELECT id, file_path FROM diagrams WHERE kind = $1 ORDER BY id LIMIT 1`, [kind]);
+export type DiagramKind = "truck" | "trailer";
+export interface DiagramRow { id: number; name: string; file_path: string }
+
+/** The diagram used when a truck has none set (the first one of that kind). */
+export async function defaultDiagram(kind: DiagramKind): Promise<DiagramRow | undefined> {
+  return one(`SELECT id, name, file_path FROM diagrams WHERE kind = $1 ORDER BY id LIMIT 1`, [kind]);
+}
+
+/** The first of `ids` that is a diagram of this kind, else the default one. */
+export async function pickDiagram(ids: (number | null | undefined)[], kind: DiagramKind): Promise<DiagramRow | undefined> {
+  for (const id of ids) {
+    if (!id) continue;
+    const d = await one<DiagramRow>(`SELECT id, name, file_path FROM diagrams WHERE id = $1 AND kind = $2`, [id, kind]);
+    if (d) return d;
+  }
+  return defaultDiagram(kind);
+}
+
+/** True if `id` is a diagram of this kind (used to validate admin input). */
+export async function isDiagramKind(id: number, kind: DiagramKind): Promise<boolean> {
+  return !!(await one(`SELECT 1 FROM diagrams WHERE id = $1 AND kind = $2`, [id, kind]));
 }

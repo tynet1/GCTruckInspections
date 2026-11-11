@@ -29,7 +29,7 @@ export async function render(app, id) {
       <b>Info</b><span>${esc(vehicleInfo(v) || "—")}</span>
       <b>Reg exp.</b><span>${v.registration_expires ? fmtDate(v.registration_expires) : "—"} ${v.registration_expired ? '<span class="pill bad">Expired</span>' : ""}</span>
       <b>Last miles</b><span>${v.last_mileage != null ? fmtNum(v.last_mileage) : "—"}</span>
-      <b>Trailer</b><span>${v.pulls_trailer ? "Usually pulls one" : "Usually none"}</span>
+      <b>Trailer</b><span>${v.pulls_trailer ? esc(v.trailer_type || "Yes") : "None"}</span>
     </div></div>`;
 
   if (draft?.status === "queued") {

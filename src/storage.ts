@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { config } from "./config.ts";
@@ -37,10 +37,24 @@ class LocalFileStore implements FileStore {
     if (!KEY_RE.test(key)) throw new Error(`Bad storage key: ${key}`);
     return join(this.root, key);
   }
+  /** Write to a temp file, flush it to disk, then rename: a crash never leaves a half-written file. */
   async put(key: string, data: Buffer): Promise<void> {
     const p = this.path(key);
     await mkdir(dirname(p), { recursive: true });
-    await writeFile(p, data);
+    const tmp = `${p}.${randomUUID()}.tmp`;
+    try {
+      const fh = await open(tmp, "wx");
+      try {
+        await fh.writeFile(data);
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+      await rename(tmp, p);
+    } catch (e) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw e;
+    }
   }
   read(key: string): Promise<Buffer> {
     return readFile(this.path(key));

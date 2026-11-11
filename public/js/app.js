@@ -1,7 +1,8 @@
 // Boot, routing and the "saved on phone" status bar.
 import { api, onSignedOut } from "./api.js";
 import { allDrafts, flush, onDraftsChange, onSent } from "./drafts.js";
-import { atLeast, setHeader, state } from "./ui.js";
+import { loadBranding } from "./brand.js";
+import { atLeast, homeHeader, state } from "./ui.js";
 import { $, esc, modal, toast } from "./util.js";
 import * as admin from "./views/admin.js";
 import * as detail from "./views/detail.js";
@@ -15,7 +16,7 @@ const routes = [
   { re: /^#\/truck\/(\d+)$/, view: truck },
   { re: /^#\/inspect\/(\d+)$/, view: form },
   { re: /^#\/inspection\/([0-9a-f-]{36})$/i, view: detail },
-  { re: /^#\/admin(?:\/(users|trucks))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
+  { re: /^#\/admin(?:\/(users|trucks|branding))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
 
 let current = null;
@@ -75,7 +76,7 @@ export function openMenu() {
   const u = state.user;
   const m = modal(`<h3>${esc(u.name)}</h3><p class="muted small" style="margin-top:-8px">Signed in as ${esc(u.role)}</p>
     <div style="display:grid;gap:10px">
-      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users &amp; trucks</a>` : ""}
+      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks &amp; branding</a>` : ""}
       <button class="secondary danger" id="mSignOut">Sign out</button>
       <button class="secondary" data-close>Close</button>
     </div>`);
@@ -107,11 +108,13 @@ async function boot() {
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("service worker", e));
   }
-  setHeader({ title: "Vehicle Inspections", sub: "Grounds Control fleet" });
+  const branding = loadBranding();
+  homeHeader();
   try {
-    state.user = await api("/me");
+    [state.user] = await Promise.all([api("/me"), branding]);
     localStorage.setItem("gc-user", JSON.stringify(state.user));
   } catch (e) {
+    await branding;
     if (e.status === 401) {
       state.user = null;
       try { localStorage.removeItem("gc-user"); } catch { /* ignore */ }

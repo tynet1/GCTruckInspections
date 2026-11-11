@@ -1,10 +1,15 @@
 // Sign in: crew pick their name and enter a PIN; supervisors/admins use email + password.
 import { api } from "../api.js";
-import { setHeader } from "../ui.js";
+import { brand } from "../brand.js";
+import { homeHeader } from "../ui.js";
 import { $, esc } from "../util.js";
 
+const hero = () => brand.logo_url
+  ? `<div class="brandhero"><img src="${esc(brand.logo_url)}" alt="${esc(brand.company_name)}"></div>`
+  : "";
+
 export async function render(app, { onSignedIn }) {
-  setHeader({ title: "Vehicle Inspections", sub: "Grounds Control fleet" });
+  homeHeader({ logo: false }); // the big logo is on the page itself
   let crew = [];
   let loadErr = null;
   let picked = null;
@@ -36,7 +41,7 @@ export async function render(app, { onSignedIn }) {
   function draw() {
     const box = app.querySelector(".signin") || app;
     if (mode === "staff") {
-      box.innerHTML = `
+      box.innerHTML = `${hero()}
         <h2>Supervisor / admin sign in</h2>
         <form class="card" id="staffForm" autocomplete="on">
           <label class="f" for="em">Email</label>
@@ -65,7 +70,7 @@ export async function render(app, { onSignedIn }) {
     }
 
     const list = crew.filter((c) => !filter || c.name.toLowerCase().includes(filter.toLowerCase()));
-    box.innerHTML = `
+    box.innerHTML = `${hero()}
       ${loadErr ? `<div class="banner err">${esc(loadErr.message)}</div>` : ""}
       <h2>Who's inspecting?</h2>
       ${crew.length > 8 ? `<input class="search" id="filter" placeholder="Find your name" value="${esc(filter)}" autocomplete="off" style="margin:0 0 10px">` : ""}

@@ -73,6 +73,23 @@ if (!url) {
     };
   }
 
+  /** Multipart POST: text fields first, then the file (the order the server reads them in). */
+  async function postFile(cookie: string, path: string, fields: Record<string, string>, file: Buffer, filename = "a.jpg") {
+    const boundary = "----gc" + randomUUID();
+    const parts = Object.entries(fields).map(([k, v]) =>
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
+    const body = Buffer.concat([
+      ...parts,
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`),
+      file,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    return app.inject({
+      method: "POST", url: "/api" + path, payload: body,
+      headers: { ...H, cookie, "content-type": `multipart/form-data; boundary=${boundary}` },
+    });
+  }
+
   async function uploadPhoto(cookie: string, id = randomUUID()) {
     const boundary = "----gc" + Date.now();
     const body = Buffer.concat([
@@ -306,13 +323,107 @@ if (!url) {
   });
 
   describe("admin", () => {
+    let adminCookie = "";
+    before(async () => {
+      const login = await inject("POST", "/auth/login", { body: { email: "admin@test.local", password: "admin-password-1" } });
+      adminCookie = cookieOf(login);
+    });
+
     test("only admins reach admin routes", async () => {
       assert.equal((await inject("GET", "/admin/users", { cookie: supCookie })).statusCode, 403);
     });
 
+    test("admin sets a truck's trailer type and diagram; old inspections keep the pictures they were drawn on", async () => {
+      const trl = await postFile(adminCookie, "/admin/diagrams", { kind: "trailer", name: "16 ft dump trailer" }, JPEG);
+      assert.equal(trl.statusCode, 201, trl.body);
+      const body = await postFile(adminCookie, "/admin/diagrams", { kind: "truck", name: "Test body" }, JPEG);
+      const trailerId = trl.json().id;
+      const truckDiaId = body.json().id;
+      const old = await one(`SELECT id, truck_diagram_id FROM inspections WHERE vehicle_id = $1 ORDER BY created_at LIMIT 1`, [vehicleId]);
+      assert.ok(old.truck_diagram_id, "submit records the truck diagram");
+
+      // A truck diagram can't be used as a trailer type.
+      const wrong = await inject("PATCH", `/admin/vehicles/${vehicleId}`, { cookie: adminCookie, body: { trailer_diagram_id: truckDiaId } });
+      assert.equal(wrong.statusCode, 400);
+
+      const res = await inject("PATCH", `/admin/vehicles/${vehicleId}`, {
+        cookie: adminCookie, body: { trailer_diagram_id: trailerId, diagram_id: truckDiaId, plate: "NEW123" },
+      });
+      assert.equal(res.statusCode, 200, res.body);
+      const v = (await inject("GET", `/vehicles/${vehicleId}`, { cookie: crewCookie })).json().vehicle;
+      assert.equal(v.pulls_trailer, true);
+      assert.equal(v.trailer_type, "16 ft dump trailer");
+      assert.equal(v.trailer_diagram_url, `/api/diagrams/${trailerId}/image`);
+      assert.equal(v.diagram_url, `/api/diagrams/${truckDiaId}/image`);
+      assert.equal(v.plate, "NEW123");
+
+      const oldDetail = (await inject("GET", `/inspections/${old.id}`, { cookie: crewCookie })).json();
+      assert.equal(oldDetail.truck_diagram_url, "/diagrams/az018-truck.jpg", "old pins stay on the old picture");
+      const last = (await inject("GET", `/vehicles/${vehicleId}/last`, { cookie: crewCookie })).json();
+      assert.equal(last.damage.length, 0, "grey pins from a different picture are not shown");
+
+      // A new inspection with the trailer records the trailer type.
+      const sub = submitBody({
+        trailer: { number: "T-7", plate: "TRL7" },
+        truck_diagram_id: truckDiaId,
+        trailer_diagram_id: trailerId,
+        items: checklist.map((c) => ({ checklist_item_id: c.id, result: "ok" })),
+        damage: [{ key: "t1", diagram: "trailer", x: 0.5, y: 0.5, note: "Bent fender" }],
+        mileage: 60000,
+      });
+      const ins = await inject("POST", "/inspections", { cookie: crewCookie, body: sub });
+      assert.equal(ins.statusCode, 201, ins.body);
+      const d = (await inject("GET", `/inspections/${ins.json().id}`, { cookie: crewCookie })).json();
+      assert.equal(d.trailer.type, "16 ft dump trailer");
+      assert.equal(d.trailer_diagram_url, `/api/diagrams/${trailerId}/image`);
+      assert.equal(d.truck_diagram_url, `/api/diagrams/${truckDiaId}/image`);
+
+      const none = await inject("PATCH", `/admin/vehicles/${vehicleId}`, { cookie: adminCookie, body: { trailer_diagram_id: "" } });
+      assert.equal(none.json().pulls_trailer, false);
+      assert.equal(none.json().trailer_type, null);
+    });
+
+    test("branding: anyone can read it, only admins change it", async () => {
+      const def = (await inject("GET", "/branding")).json();
+      assert.equal(def.company_name, "Grounds Control");
+      assert.equal(def.logo_url, null);
+
+      const notAdmin = await inject("PUT", "/admin/branding", { cookie: supCookie, body: { company_name: "X" } });
+      assert.equal(notAdmin.statusCode, 403);
+      const badColor = await inject("PUT", "/admin/branding", { cookie: adminCookie, body: { color: "green" } });
+      assert.equal(badColor.statusCode, 400);
+      const ok = await inject("PUT", "/admin/branding", {
+        cookie: adminCookie, body: { company_name: "Acme Landscaping", app_name: "Truck Checks", color: "#1F5F8B" },
+      });
+      assert.equal(ok.statusCode, 200, ok.body);
+      assert.deepEqual(ok.json(), { company_name: "Acme Landscaping", app_name: "Truck Checks", color: "#1f5f8b", logo_url: null });
+    });
+
+    test("branding: logo upload, serve, PDF and remove", { timeout: 60000 }, async () => {
+      const notImage = await postFile(adminCookie, "/admin/branding/logo", {}, Buffer.from("not an image at all"), "logo.svg");
+      assert.equal(notImage.statusCode, 400);
+      const png = Buffer.from(PNG.split(",")[1], "base64");
+      const up = await postFile(adminCookie, "/admin/branding/logo", {}, png, "logo.png");
+      assert.equal(up.statusCode, 200, up.body);
+      const logoUrl: string = up.json().logo_url;
+      assert.match(logoUrl, /^\/api\/branding\/logo\?v=[0-9a-f]{8}$/);
+      assert.equal(up.json().company_name, "Acme Landscaping", "other settings are kept");
+
+      const img = await app.inject({ method: "GET", url: logoUrl });
+      assert.equal(img.statusCode, 200);
+      assert.equal(img.headers["content-type"], "image/png");
+      assert.match(String(img.headers["cache-control"]), /immutable/);
+
+      const insp = await one(`SELECT id FROM inspections ORDER BY created_at LIMIT 1`);
+      const pdf = await inject("GET", `/inspections/${insp.id}/pdf`, { cookie: supCookie });
+      assert.equal(pdf.statusCode, 200, pdf.body.slice(0, 200));
+
+      const del = await inject("DELETE", "/admin/branding/logo", { cookie: adminCookie });
+      assert.equal(del.json().logo_url, null);
+      assert.equal((await app.inject({ method: "GET", url: "/api/branding/logo" })).statusCode, 404);
+    });
+
     test("admin adds a crew user who can then sign in", async () => {
-      const login = await inject("POST", "/auth/login", { body: { email: "admin@test.local", password: "admin-password-1" } });
-      const adminCookie = cookieOf(login);
       const add = await inject("POST", "/admin/users", { cookie: adminCookie, body: { name: "New Crew", role: "crew", pin: "5555" } });
       assert.equal(add.statusCode, 201, add.body);
       const signin = await inject("POST", "/auth/pin", { body: { user_id: add.json().id, pin: "5555" } });

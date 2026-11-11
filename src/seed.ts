@@ -67,13 +67,20 @@ export async function seedVehicles(log: (m: string) => void): Promise<void> {
   const rows = parseCsv(text).filter((r) => r.truck_code && !r.truck_code.startsWith("#"));
   let added = 0;
   for (const r of rows) {
+    // Trucks that pull a trailer get the trailer type named in the optional "trailer" column, else the default one.
     const res = await q(
-      `INSERT INTO vehicles (truck_code, unit, vin, plate, year, make, model, registration_expires, pulls_trailer, diagram_id)
-       VALUES (upper($1), NULLIF($2,''), NULLIF(upper($3),''), NULLIF(upper($4),''), NULLIF($5,'')::smallint,
-               NULLIF($6,''), NULLIF($7,''), NULLIF($8,'')::date, coalesce(NULLIF(lower($9),'') IN ('true','yes','1','y'), false),
-               (SELECT id FROM diagrams WHERE name = NULLIF($10,'') LIMIT 1))
+      `INSERT INTO vehicles (truck_code, unit, vin, plate, year, make, model, registration_expires,
+                             pulls_trailer, diagram_id, trailer_diagram_id)
+       SELECT upper($1), NULLIF($2,''), NULLIF(upper($3),''), NULLIF(upper($4),''), NULLIF($5,'')::smallint,
+              NULLIF($6,''), NULLIF($7,''), NULLIF($8,'')::date, p.pulls,
+              (SELECT id FROM diagrams WHERE kind = 'truck' AND name = NULLIF($10,'') LIMIT 1),
+              CASE WHEN p.pulls THEN COALESCE(
+                (SELECT id FROM diagrams WHERE kind = 'trailer' AND name = NULLIF($11,'') LIMIT 1),
+                (SELECT id FROM diagrams WHERE kind = 'trailer' ORDER BY id LIMIT 1)) END
+         FROM (SELECT coalesce(NULLIF(lower($9),'') IN ('true','yes','1','y'), false) AS pulls) p
        ON CONFLICT DO NOTHING RETURNING id`,
-      [r.truck_code, r.unit, r.vin, r.plate, r.year, r.make, r.model, r.registration_expires, r.pulls_trailer, r.diagram ?? ""],
+      [r.truck_code, r.unit, r.vin, r.plate, r.year, r.make, r.model, r.registration_expires, r.pulls_trailer,
+        r.diagram ?? "", r.trailer ?? ""],
     );
     added += res.length;
   }

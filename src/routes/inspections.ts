@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
 import { requireRole, requireUser } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
-import { defaultDiagram, diagramUrl } from "../diagrams.ts";
+import { defaultDiagram, diagramUrl, pickDiagram } from "../diagrams.ts";
 import {
   bad, conflict, DATE_RE, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE, uuidParam,
 } from "../http.ts";
@@ -26,6 +26,9 @@ export interface SubmitInput {
   new_observations: string | null;
   comments: string | null;
   trailer: { number: string | null; plate: string | null } | null;
+  /** The pictures the phone showed (older drafts don't send these; the truck's current ones are used). */
+  truck_diagram_id: number | null;
+  trailer_diagram_id: number | null;
   items: ItemIn[];
   damage: DamageIn[];
   photos: PhotoIn[];
@@ -107,6 +110,8 @@ export function parseSubmit(body: unknown): SubmitInput {
     new_observations: str(b.new_observations, "New observations", 5000),
     comments: str(b.comments, "Comments", 5000),
     trailer,
+    truck_diagram_id: b.truck_diagram_id == null ? null : int(b.truck_diagram_id, "truck_diagram_id", 1),
+    trailer_diagram_id: b.trailer_diagram_id == null ? null : int(b.trailer_diagram_id, "trailer_diagram_id", 1),
     items,
     damage,
     photos,
@@ -127,8 +132,12 @@ export async function submitInspection(input: SubmitInput, userId: number) {
   const dup = await existingByClientId(input.client_id);
   if (dup) return { ...dup, duplicate: true };
 
-  const vehicle = await one(`SELECT id FROM vehicles WHERE id = $1 AND active`, [input.vehicle_id]);
+  const vehicle = await one<{ id: number; diagram_id: number | null; trailer_diagram_id: number | null }>(
+    `SELECT id, diagram_id, trailer_diagram_id FROM vehicles WHERE id = $1 AND active`, [input.vehicle_id]);
   if (!vehicle) throw bad("That truck isn't in the active fleet.");
+  // Record the pictures the pins were placed on, so later changes to the truck never move them.
+  const truckDiagram = await pickDiagram([input.truck_diagram_id, vehicle.diagram_id], "truck");
+  const trailerDiagram = input.trailer ? await pickDiagram([input.trailer_diagram_id, vehicle.trailer_diagram_id], "trailer") : null;
 
   // Every active checklist item in the visible sections must be answered, and nothing else.
   const sections: Section[] = input.trailer ? ["exterior", "interior", "trailer"] : ["exterior", "interior"];
@@ -184,16 +193,18 @@ export async function submitInspection(input: SubmitInput, userId: number) {
         `INSERT INTO inspections (
            client_id, vehicle_id, trailer_id, trailer_number_text, trailer_plate_text, trailer_inspected,
            inspection_date, inspector_user_id, inspector_name, mileage, oil_change_due,
-           existing_notes, new_observations, comments, employee_signature_path, previous_mileage, mileage_flagged)
+           existing_notes, new_observations, comments, employee_signature_path, previous_mileage, mileage_flagged,
+           truck_diagram_id, trailer_diagram_id)
          VALUES ($1, $2,
            (SELECT id FROM trailers WHERE active AND lower(trailer_number) = lower($3) LIMIT 1), $3, $4, $5,
-           $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+           $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          ON CONFLICT (client_id) DO NOTHING
          RETURNING id, mileage_flagged`,
         [
           input.client_id, input.vehicle_id, input.trailer?.number ?? null, input.trailer?.plate ?? null, !!input.trailer,
           input.inspection_date, userId, input.inspector_name, input.mileage, input.oil_change_due,
           input.existing_notes, input.new_observations, input.comments, sigKey, previousMileage, mileageFlagged,
+          truckDiagram?.id ?? null, trailerDiagram?.id ?? null,
         ],
       );
       if (!ins.rows[0]) throw new DuplicateSubmit();
@@ -250,10 +261,12 @@ async function insertChildren(c: PoolClient, id: string, input: SubmitInput, che
 export async function loadInspection(id: string) {
   const i = await one(
     `SELECT i.*, v.truck_code, v.unit, v.vin, v.plate, v.year, v.make, v.model, v.registration_expires,
-            d.id AS diagram_id, d.file_path AS diagram_path
+            d.id AS diagram_id, d.file_path AS diagram_path,
+            td.id AS trailer_dia_id, td.file_path AS trailer_dia_path, td.name AS trailer_type
        FROM inspections i
        JOIN vehicles v ON v.id = i.vehicle_id
-       LEFT JOIN diagrams d ON d.id = v.diagram_id
+       LEFT JOIN diagrams d ON d.id = COALESCE(i.truck_diagram_id, v.diagram_id)
+       LEFT JOIN diagrams td ON td.id = COALESCE(i.trailer_diagram_id, v.trailer_diagram_id)
       WHERE i.id = $1`,
     [id],
   );
@@ -274,15 +287,17 @@ export async function loadInspection(id: string) {
     `SELECT id, caption, damage_mark_id, inspection_item_id, file_path FROM photos WHERE inspection_id = $1 ORDER BY created_at, id`,
     [id],
   );
-  const truckFallback = await defaultDiagram("truck");
-  const trailerDiagram = await defaultDiagram("trailer");
+  const truckFallback = i.diagram_id ? null : await defaultDiagram("truck");
+  const trailerFallback = i.trailer_dia_id ? null : await defaultDiagram("trailer");
   return {
     inspection: i,
     items,
     damage,
     photos,
     truckDiagram: { id: i.diagram_id ?? truckFallback?.id ?? null, file_path: i.diagram_path ?? truckFallback?.file_path ?? null },
-    trailerDiagram: trailerDiagram ?? null,
+    trailerDiagram: i.trailer_dia_id
+      ? { id: i.trailer_dia_id as number, name: i.trailer_type as string, file_path: i.trailer_dia_path as string }
+      : trailerFallback ?? null,
   };
 }
 
@@ -340,7 +355,9 @@ export default async function inspectionRoutes(app: FastifyInstance) {
       existing_notes: i.existing_notes,
       new_observations: i.new_observations,
       comments: i.comments,
-      trailer: i.trailer_inspected ? { number: i.trailer_number_text, plate: i.trailer_plate_text } : null,
+      trailer: i.trailer_inspected
+        ? { number: i.trailer_number_text, plate: i.trailer_plate_text, type: trailerDiagram?.name ?? null }
+        : null,
       created_at: i.created_at,
       items,
       damage,

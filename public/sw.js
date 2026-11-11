@@ -16,6 +16,7 @@ const SHELL_FILES = [
   "/icons/icon-192.png",
   "/js/app.js",
   "/js/api.js",
+  "/js/brand.js",
   "/js/drafts.js",
   "/js/idb.js",
   "/js/sig.js",
@@ -92,7 +93,8 @@ self.addEventListener("fetch", (event) => {
 
   if (p.startsWith("/api/")) {
     if (/\/pdf$/.test(p) || p === "/api/auth/logout") return;
-    if (/^\/api\/photos\/|^\/api\/inspections\/[^/]+\/signature\/|^\/api\/diagrams\/\d+\/image$/.test(p)) {
+    if (/^\/api\/photos\/|^\/api\/inspections\/[^/]+\/signature\/|^\/api\/diagrams\/\d+\/image$/.test(p)
+      || (p === "/api/branding/logo" && url.searchParams.has("v"))) {
       event.respondWith(cacheFirst(req, RUNTIME));
       return;
     }

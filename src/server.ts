@@ -15,6 +15,7 @@ import { migrate } from "./migrate.ts";
 import { closePdfBrowser } from "./pdf.ts";
 import adminRoutes from "./routes/admin.ts";
 import authRoutes from "./routes/auth.ts";
+import brandingRoutes from "./routes/branding.ts";
 import inspectionRoutes from "./routes/inspections.ts";
 import photoRoutes, { cleanupOrphanPhotos } from "./routes/photos.ts";
 import vehicleRoutes from "./routes/vehicles.ts";
@@ -101,6 +102,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(
     async (api) => {
       await api.register(authRoutes);
+      await api.register(brandingRoutes);
       await api.register(vehicleRoutes);
       await api.register(photoRoutes);
       await api.register(inspectionRoutes);

@@ -30,11 +30,16 @@ npm run user -- add --name "X" --role crew --pin 1234
 
 ## Working rules
 
+- **Never lose data.** Tyler's top rule: prevent data loss at all costs. Read SPEC §4a before changing anything that stores,
+  moves or deletes data. No hard deletes from the app (retire instead), writes are atomic, migrations are additive.
 - Phone-first. Test every screen at 390×844 (iPhone) and 820×1180 (iPad). Touch targets at least 44px. Numeric keypad for mileage.
 - Expect bad cell signal. Drafts live on the device, uploads retry, and submits are idempotent via `client_id`.
 - Submitted inspections are read-only (enforced by database triggers); corrections go in the supervisor note.
 - Every state-changing `/api` call needs the `x-gc-app: 1` header (CSRF guard); `public/js/api.js` adds it.
 - Everything runs with `docker compose up -d` on Ubuntu. Secrets go in `.env` (never committed); ship a `.env.example`.
   Local dev settings go in `.env.local` (also gitignored), so they never collide with the server's `.env`.
-- Phase 1 (MVP) is built; stop for Tyler's review before starting phase 2.
+- For now it runs on Tyler's Windows PC under Docker Desktop (needs WSL) and only Tyler's phone uses it.
+- Phase 1 (MVP) is built, plus trailer types and branding. Phase 2 (maintenance log, fleet management, separate-PDF batch
+  export) is scoped in SPEC §9; confirm the open fleet-management questions with Tyler before building it.
+  Phase 3 is a full code review, performance/stability work and a burn-in test.
 - Ask Tyler before choosing a remote-access method other than Cloudflare Tunnel, or before adding paid services.

@@ -57,7 +57,7 @@ export async function render(app, id) {
     <dt>Inspector</dt><dd>${esc(i.inspector_name)}</dd>
     <dt>Mileage</dt><dd>${fmtNum(i.mileage)}${i.mileage_flagged ? ' <span class="pill warn">Lower than last</span>' : ""}</dd>
     <dt>Oil change due</dt><dd>${i.oil_change_due ? '<span class="pill warn">Yes</span>' : "No"}</dd>
-    ${i.trailer ? `<dt>Trailer</dt><dd>${esc(i.trailer.number || "—")} · plate ${esc(i.trailer.plate || "—")}</dd>` : ""}
+    ${i.trailer ? `<dt>Trailer</dt><dd>${esc(i.trailer.number || "—")} · plate ${esc(i.trailer.plate || "—")}${i.trailer.type ? `<br><span class="small muted">${esc(i.trailer.type)}</span>` : ""}</dd>` : ""}
     <dt>Status</dt><dd>${i.status === "reviewed" ? '<span class="pill okk">Signed off</span>' : '<span class="pill grey">Awaiting sign-off</span>'}</dd>
   </dl>${isSup ? `<a class="secondary" style="width:100%;margin-top:12px" href="/api/inspections/${esc(i.id)}/pdf" download>Export PDF</a>` : ""}</div>`;
 

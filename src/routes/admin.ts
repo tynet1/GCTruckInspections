@@ -3,6 +3,7 @@ import { checkPassword, hashSecret, PIN_RE, requireRole } from "../auth.ts";
 import type { Role } from "../auth.ts";
 import { one, q } from "../db.ts";
 import { bad, conflict, idParam, int, isValidDate, notFound, obj, reqStr, str } from "../http.ts";
+import { isDiagramKind } from "../diagrams.ts";
 import { files, imageType, newKey } from "../storage.ts";
 import { vehicleRows } from "./vehicles.ts";
 
@@ -94,10 +95,15 @@ export default async function adminRoutes(app: FastifyInstance) {
 
   // ---------- Trucks ----------
   app.get("/admin/vehicles", async () =>
-    q(`SELECT v.*, d.name AS diagram_name FROM vehicles v LEFT JOIN diagrams d ON d.id = v.diagram_id
+    q(`SELECT v.*, d.name AS diagram_name, td.name AS trailer_type
+         FROM vehicles v
+         LEFT JOIN diagrams d ON d.id = v.diagram_id
+         LEFT JOIN diagrams td ON td.id = v.trailer_diagram_id
         ORDER BY v.active DESC, v.truck_code`));
 
-  function vehicleFields(b: Record<string, unknown>, creating: boolean) {
+  const optId = (v: unknown, label: string) => (v === null || v === "" ? null : int(v, label, 1));
+
+  async function vehicleFields(b: Record<string, unknown>, creating: boolean) {
     const out: Record<string, unknown> = {};
     if (creating || b.truck_code !== undefined) {
       const code = reqStr(b.truck_code, "Truck ID", 20).toUpperCase().replace(/\s+/g, "");
@@ -118,14 +124,27 @@ export default async function adminRoutes(app: FastifyInstance) {
       if (d && !isValidDate(d)) throw bad("Registration expiration must be a date.");
       out.registration_expires = d;
     }
-    if (b.pulls_trailer !== undefined) out.pulls_trailer = !!b.pulls_trailer;
-    if (b.diagram_id !== undefined) out.diagram_id = b.diagram_id === null || b.diagram_id === "" ? null : int(b.diagram_id, "Diagram", 1);
+    if (b.diagram_id !== undefined) {
+      const id = optId(b.diagram_id, "Diagram");
+      if (id && !(await isDiagramKind(id, "truck"))) throw bad("Pick a truck diagram from the list.");
+      out.diagram_id = id;
+    }
+    // Trailer: null = no trailer; otherwise the trailer type (a trailer diagram). pulls_trailer follows it.
+    if (b.trailer_diagram_id !== undefined) {
+      const id = optId(b.trailer_diagram_id, "Trailer type");
+      if (id && !(await isDiagramKind(id, "trailer"))) throw bad("Pick a trailer type from the list.");
+      out.trailer_diagram_id = id;
+      out.pulls_trailer = id != null;
+    } else if (b.pulls_trailer !== undefined) {
+      out.pulls_trailer = !!b.pulls_trailer;
+      if (!out.pulls_trailer) out.trailer_diagram_id = null;
+    }
     if (b.active !== undefined) out.active = !!b.active;
     return out;
   }
 
   app.post("/admin/vehicles", async (req, reply) => {
-    const f = vehicleFields(obj(req.body), true);
+    const f = await vehicleFields(obj(req.body), true);
     const cols = Object.keys(f);
     try {
       const r = await one(
@@ -140,7 +159,7 @@ export default async function adminRoutes(app: FastifyInstance) {
 
   app.patch("/admin/vehicles/:id", async (req) => {
     const id = idParam(req.params);
-    const f = vehicleFields(obj(req.body), false);
+    const f = await vehicleFields(obj(req.body), false);
     const cols = Object.keys(f);
     if (!cols.length) return { ok: true };
     try {

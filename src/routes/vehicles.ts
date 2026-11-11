@@ -8,19 +8,35 @@ const VEHICLE_COLS = `
   vs.id, vs.truck_code, vs.unit, vs.vin, vs.plate, vs.year, vs.make, vs.model,
   vs.registration_expires, vs.registration_expired, vs.pulls_trailer,
   vs.last_inspection_id, vs.last_inspection_date, vs.last_status, vs.last_mileage, vs.open_repairs,
-  d.id AS diagram_id, d.file_path AS diagram_path`;
+  d.id AS diagram_id, d.file_path AS diagram_path,
+  td.id AS trailer_diagram_id, td.file_path AS trailer_path, td.name AS trailer_type`;
 
+/**
+ * Trucks as the app shows them. diagram_id / trailer_diagram_id are the pictures the form uses
+ * (the truck's own, or the default when none is set); trailer_type is null when the truck has no trailer.
+ */
 export async function vehicleRows(where = "", params: unknown[] = []) {
-  const fallback = await defaultDiagram("truck");
+  const truckDefault = await defaultDiagram("truck");
+  const trailerDefault = await defaultDiagram("trailer");
   const rows = await q(
-    `SELECT ${VEHICLE_COLS} FROM vehicle_status vs LEFT JOIN diagrams d ON d.id = vs.diagram_id ${where}
+    `SELECT ${VEHICLE_COLS} FROM vehicle_status vs
+       LEFT JOIN diagrams d ON d.id = vs.diagram_id
+       LEFT JOIN diagrams td ON td.id = vs.trailer_diagram_id
+     ${where}
      ORDER BY vs.truck_code`,
     params,
   );
-  return rows.map(({ diagram_id, diagram_path, ...v }) => ({
-    ...v,
-    diagram_url: diagramUrl(diagram_id ?? fallback?.id ?? null, diagram_path ?? fallback?.file_path ?? null),
-  }));
+  return rows.map(({ diagram_id, diagram_path, trailer_diagram_id, trailer_path, ...v }) => {
+    const truck = diagram_id ? { id: diagram_id, file_path: diagram_path } : truckDefault;
+    const trailer = trailer_diagram_id ? { id: trailer_diagram_id, file_path: trailer_path } : trailerDefault;
+    return {
+      ...v,
+      diagram_id: truck?.id ?? null,
+      diagram_url: diagramUrl(truck?.id ?? null, truck?.file_path ?? null),
+      trailer_diagram_id: trailer?.id ?? null,
+      trailer_diagram_url: diagramUrl(trailer?.id ?? null, trailer?.file_path ?? null),
+    };
+  });
 }
 
 export default async function vehicleRoutes(app: FastifyInstance) {
@@ -57,15 +73,20 @@ export default async function vehicleRoutes(app: FastifyInstance) {
     const id = idParam(req.params);
     const last = await one(
       `SELECT id, inspection_date, existing_notes, new_observations, mileage,
-              trailer_inspected, trailer_number_text, trailer_plate_text
+              trailer_inspected, trailer_number_text, trailer_plate_text, truck_diagram_id, trailer_diagram_id
          FROM inspections WHERE vehicle_id = $1
         ORDER BY inspection_date DESC, created_at DESC LIMIT 1`,
       [id],
     );
-    const damage = last
-      ? await q(`SELECT diagram, seq, x, y, note FROM damage_marks WHERE inspection_id = $1 ORDER BY diagram, seq`, [last.id])
-      : [];
-    return { inspection: last ?? null, damage };
+    if (!last) return { inspection: null, damage: [] };
+    // Old pins only make sense on the same picture: skip them if the truck's diagram or trailer type changed.
+    const [now] = await vehicleRows("WHERE vs.id = $1", [id]);
+    const same = (kind: string) => kind === "truck"
+      ? !last.truck_diagram_id || last.truck_diagram_id === now?.diagram_id
+      : !last.trailer_diagram_id || last.trailer_diagram_id === now?.trailer_diagram_id;
+    const marks = await q(`SELECT diagram, seq, x, y, note FROM damage_marks WHERE inspection_id = $1 ORDER BY diagram, seq`, [last.id]);
+    const { truck_diagram_id: _t, trailer_diagram_id: _r, ...inspection } = last;
+    return { inspection, damage: marks.filter((m) => same(m.diagram)) };
   });
 
   // Everything the inspection form needs that isn't truck-specific.

@@ -2,7 +2,7 @@
 import { api } from "../api.js";
 import { openMenu } from "../app.js";
 import { allDrafts } from "../drafts.js";
-import { atLeast, errorHtml, setHeader, stale, state } from "../ui.js";
+import { atLeast, errorHtml, homeHeader, stale, state } from "../ui.js";
 import { $, daysAgo, esc, fmtDate, vehicleInfo } from "../util.js";
 import { inspectionRow } from "./common.js";
 
@@ -10,7 +10,7 @@ let query = "";
 
 export async function render(app) {
   const nav = state.nav;
-  setHeader({ title: "Vehicle Inspections", sub: `Grounds Control fleet · ${state.user.name}`, actions: [{ label: "Menu", onclick: openMenu }] });
+  homeHeader({ showUser: true, actions: [{ label: "Menu", onclick: openMenu }] });
   app.innerHTML = `
     <input class="search" id="q" type="search" placeholder="Search truck, plate, VIN…" value="${esc(query)}" autocomplete="off" aria-label="Search trucks">
     <div id="review"></div>
