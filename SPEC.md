@@ -178,14 +178,17 @@ POST /service-logs/:id/void         {reason}                                    
 2. **Maintenance log and fleet management:**
    - **Maintenance log (built, see §4 6a):** for the shop manager (`shop` role): log service and repairs on a truck, close the
      repair items it fixes, next-due tracking, and each truck's full history. Replaces Frank's paper logs.
-   - **Several types of work on one maintenance entry (requested 2026-11-11, not started):** today an entry has exactly one
-     type (oil change, tires, brakes, …); one shop visit often covers several, e.g. oil change + tires + brakes. Make "Type of
-     work" a multi-select (tap chips on and off, at least one). Plan: an additive migration adds a list of types per entry,
-     filled from the current single type, with the old column kept so nothing already logged changes. Everything that reads
-     the type follows it: repair auto-ticking matches any selected type, lists and the inspection PDF show every type, edit
-     history records type changes. **To decide with Tyler first:** next-due is tracked per type today (one "next due"
-     mileage/date per entry); with several types on one entry, should each selected type get its own next-due (e.g. oil
-     at +5,000 mi, tires at +40,000 mi), or one shared next-due for the visit?
+   - **Several types of work on one maintenance entry (requested 2026-11-11, designed, not built):** today an entry has
+     exactly one type (oil change, tires, brakes, …); one shop visit often covers several, e.g. oil change + tires + brakes.
+     - Form: "Type of work" becomes a multi-select (tap chips on and off, at least one).
+     - **Next-due is separate per type (Tyler, 2026-11-11):** each selected type gets its own optional "next due" mileage
+       and/or date under the chips (e.g. oil at +5,000 mi, tires at +40,000 mi). The truck page's "Next due" list keeps
+       one line per type, taken from the newest live entry that set a next-due for that type.
+     - Data: an additive migration stores the entry's work as a list of {type, next-due mileage, next-due date} on the entry
+       row, filled from today's single type and next-due, so edit history, version checks and voiding cover it unchanged.
+       The old columns stay, so nothing already logged changes.
+     - Everything that reads the type follows it: repair auto-ticking matches any selected type, lists and the inspection
+       PDF show every type with its next-due, edit history shows type changes.
    - **Fleet management:** add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
      and the rest of the truck's lifecycle. Scope to confirm with Tyler before building; proposed:
      status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage
