@@ -646,6 +646,72 @@ if (!url) {
       assert.ok(s.entries.length >= 2);
     });
 
+    test("one entry can have several types of work, each with its own next-due", async () => {
+      const truck = (await one(`SELECT id FROM vehicles WHERE truck_code NOT IN ('AZ018', 'AZ002') ORDER BY id OFFSET 2 LIMIT 1`)).id;
+      const body = (work: unknown, over: Record<string, unknown> = {}) => ({
+        client_id: randomUUID(), vehicle_id: truck, service_date: "2026-11-10", mileage: 30000,
+        description: "Oil, filter and four new tires", work, ...over,
+      });
+      for (const [bad, why] of [
+        [[], "none picked"],
+        [[{ type: "oil_change" }, { type: "oil_change" }], "picked twice"],
+        [[{ type: "paint" }], "unknown type"],
+        [[{ type: "tires", next_due_mileage: "soon" }], "next due mileage not a number"],
+        [[{ type: "tires", next_due_date: "2027-02-30" }], "next due date not a date"],
+      ] as const) {
+        assert.equal((await inject("POST", "/service-logs", { cookie: shopCookie, body: body(bad) })).statusCode, 400, why);
+      }
+
+      const res = await inject("POST", "/service-logs", {
+        cookie: shopCookie,
+        body: body([{ type: "oil_change", next_due_mileage: 35000 }, { type: "tires", next_due_date: "2028-11-10" }]),
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      const id = res.json().id;
+      const e = (await inject("GET", `/service-logs/${id}`, { cookie: shopCookie })).json();
+      assert.deepEqual(e.work.map((w: { type: string; label: string }) => [w.type, w.label]), [["oil_change", "Oil change"], ["tires", "Tires"]]);
+      assert.equal(e.category_label, "Oil change, Tires");
+      assert.equal(e.category, "oil_change", "the old single-type field mirrors the first type");
+      assert.equal(e.next_due_mileage, 35000);
+
+      const s = (await inject("GET", `/vehicles/${truck}/service`, { cookie: shopCookie })).json();
+      const due = Object.fromEntries(s.next_due.map((d: { category: string; mileage: number | null; date: string | null; entry_id: number }) =>
+        [d.category, [d.mileage, d.date, d.entry_id]]));
+      assert.deepEqual(due, { oil_change: [35000, null, id], tires: [null, "2028-11-10", id] });
+      assert.equal(s.entries.find((x: { id: number }) => x.id === id).category_label, "Oil change, Tires");
+
+      // A newer oil change without a next-due replaces the old oil due date; tires keep theirs.
+      const later = await inject("POST", "/service-logs", {
+        cookie: shopCookie, body: body([{ type: "oil_change" }], { service_date: "2026-11-11", description: "Oil top-off" }),
+      });
+      assert.equal(later.statusCode, 201, later.body);
+      const s2 = (await inject("GET", `/vehicles/${truck}/service`, { cookie: shopCookie })).json();
+      assert.deepEqual(s2.next_due.map((d: { category: string }) => d.category), ["tires"]);
+
+      // Editing the types is recorded in the history, readably.
+      const edit = await inject("PATCH", `/service-logs/${id}`, {
+        cookie: shopCookie,
+        body: { version: e.version, work: [{ type: "oil_change", next_due_mileage: 35000 }, { type: "tires", next_due_date: "2028-11-10" }, { type: "brakes" }] },
+      });
+      assert.equal(edit.statusCode, 200, edit.body);
+      assert.deepEqual(edit.json().history[0].changes, [{
+        field: "work",
+        from: "Oil change (next due 35,000 mi), Tires (next due 11/10/2028)",
+        to: "Oil change (next due 35,000 mi), Tires (next due 11/10/2028), Brakes",
+      }]);
+      const same = await inject("PATCH", `/service-logs/${id}`, { cookie: shopCookie, body: { version: edit.json().version, work: edit.json().work } });
+      assert.equal(same.json().version, edit.json().version, "saving the same types again isn't a change");
+    });
+
+    test("an older copy of the app (one category and one next-due) still saves", async () => {
+      const res = await inject("POST", "/service-logs", {
+        cookie: shopCookie, body: entryBody({ category: "brakes", description: "Front pads", next_due_mileage: 90000 }),
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      const e = (await inject("GET", `/service-logs/${res.json().id}`, { cookie: shopCookie })).json();
+      assert.deepEqual(e.work.map((w: { type: string; next_due_mileage: number }) => [w.type, w.next_due_mileage]), [["brakes", 90000]]);
+    });
+
     test("voiding reopens the repairs it closed; entries and photos can't be deleted or changed in the database", async () => {
       const v = await inject("POST", `/service-logs/${entryId}/void`, { cookie: shopCookie, body: { reason: "Logged on the wrong day" } });
       assert.equal(v.statusCode, 200, v.body);

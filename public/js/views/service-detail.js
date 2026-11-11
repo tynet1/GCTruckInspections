@@ -5,7 +5,7 @@ import { $, esc, fmtDate, fmtMoney, fmtNum, lightbox, modal, toast } from "../ut
 import { SECTION_TITLES } from "./common.js";
 
 const LABELS = {
-  service_date: "Date", mileage: "Mileage", category: "Type", description: "Work done", parts: "Parts", cost: "Cost",
+  service_date: "Date", mileage: "Mileage", work: "Type of work", category: "Type", description: "Work done", parts: "Parts", cost: "Cost",
   performed_by: "Done by", vendor: "Outside shop", notes: "Notes", next_due_mileage: "Next due mileage", next_due_date: "Next due date",
 };
 
@@ -42,7 +42,7 @@ export async function render(app, id) {
       <div class="small" style="margin-top:4px">Kept for the record, but it no longer counts for next-due dates or mileage.</div></div>`;
   }
   h += `<div class="card" style="margin-top:14px"><dl class="kv">
-      <dt>Type</dt><dd><span class="pill">${esc(e.category_label)}</span></dd>
+      <dt>Type</dt><dd><span class="row">${e.work.map((w) => `<span class="pill">${esc(w.label)}</span>`).join("")}</span></dd>
       <dt>Date</dt><dd>${fmtDate(e.service_date)}</dd>
       <dt>Mileage</dt><dd>${e.mileage != null ? `${fmtNum(e.mileage)} mi` : "—"}</dd>
       <dt>Work done</dt><dd style="white-space:pre-wrap">${esc(e.description)}</dd>
@@ -50,8 +50,10 @@ export async function render(app, id) {
       ${e.cost != null ? `<dt>Cost</dt><dd>${fmtMoney(e.cost)}</dd>` : ""}
       ${e.performed_by ? `<dt>Done by</dt><dd>${esc(e.performed_by)}</dd>` : ""}
       ${e.vendor ? `<dt>Outside shop</dt><dd>${esc(e.vendor)}</dd>` : ""}
-      ${e.next_due_mileage != null || e.next_due_date ? `<dt>Next due</dt><dd>${[
-        e.next_due_mileage != null ? `${fmtNum(e.next_due_mileage)} mi` : "", e.next_due_date ? fmtDate(e.next_due_date) : ""].filter(Boolean).join(" or ")}</dd>` : ""}
+      ${e.work.some((w) => w.next_due_mileage != null || w.next_due_date) ? `<dt>Next due</dt><dd>${e.work
+        .filter((w) => w.next_due_mileage != null || w.next_due_date)
+        .map((w) => `<div>${esc(w.label)}: ${[w.next_due_mileage != null ? `${fmtNum(w.next_due_mileage)} mi` : "",
+          w.next_due_date ? fmtDate(w.next_due_date) : ""].filter(Boolean).join(" or ")}</div>`).join("")}</dd>` : ""}
       ${e.notes ? `<dt>Notes</dt><dd style="white-space:pre-wrap">${esc(e.notes)}</dd>` : ""}
     </dl></div>`;
 

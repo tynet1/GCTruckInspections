@@ -78,8 +78,9 @@ Tunnel, which needs a domain on Tyler's Cloudflare account.
 6. **Repairs board** (supervisor): all open repair items across the fleet, filterable by truck. Mark resolved with a note, optionally linked to a service log entry.
 6a. **Maintenance log** (shop, admin; supervisors can read): on the truck page, "Next due" (from the newest entry of each type,
    orange within 500 miles or 14 days, red when due), the list of entries, and "+ Log maintenance". The entry form has date,
-   mileage, type of work (oil change, tires, brakes, repair, preventive maintenance, inspection/registration, other), work done,
-   parts, cost, done by, outside shop, the truck's open repairs to tick off, next due mileage/date, photos, notes. An entry
+   mileage, types of work (one or more of: oil change, tires, brakes, repair, preventive maintenance, inspection/registration,
+   other), work done, parts, cost, done by, outside shop, the truck's open repairs and damage to tick off, next due
+   mileage/date for each type picked, photos, notes. An entry
    shows its repairs, photos and every change ("Cost: $64.20 → $66.40"). Shop/admin can edit it or void it with a reason.
    **Closing repairs:** every open repair (truck page and inspection) has a **Log fix** button for shop/admin that opens a new
    entry with that repair ticked and the type of work picked. Picking a type of work also ticks matching open repairs
@@ -195,15 +196,17 @@ POST /service-logs/:id/void         {reason}                                    
 2. **Maintenance log and fleet management:**
    - **Maintenance log (built, see §4 6a):** for the shop manager (`shop` role): log service and repairs on a truck, close the
      repair items it fixes, next-due tracking, and each truck's full history. Replaces Frank's paper logs.
-   - **Several types of work on one maintenance entry (requested 2026-11-11, designed, not built):** today an entry has
-     exactly one type (oil change, tires, brakes, …); one shop visit often covers several, e.g. oil change + tires + brakes.
+   - **Several types of work on one maintenance entry (built 2026-11-11, migration 007):** an entry used to have exactly
+     one type (oil change, tires, brakes, …); one shop visit often covers several, e.g. oil change + tires + brakes.
      - Form: "Type of work" becomes a multi-select (tap chips on and off, at least one).
      - **Next-due is separate per type (Tyler, 2026-11-11):** each selected type gets its own optional "next due" mileage
        and/or date under the chips (e.g. oil at +5,000 mi, tires at +40,000 mi). The truck page's "Next due" list keeps
-       one line per type, taken from the newest live entry that set a next-due for that type.
+       one line per type, taken from the newest live entry with that type (if that entry has no next-due for it, an older
+       one is out of date and isn't shown).
      - Data: an additive migration stores the entry's work as a list of {type, next-due mileage, next-due date} on the entry
        row, filled from today's single type and next-due, so edit history, version checks and voiding cover it unchanged.
-       The old columns stay, so nothing already logged changes.
+       The old columns stay and mirror the first type, so nothing already logged changes, and an older copy of the app
+       (or a save queued on a phone before the update) that sends one type and one next-due is still accepted.
      - Everything that reads the type follows it: repair auto-ticking matches any selected type, lists and the inspection
        PDF show every type with its next-due, edit history shows type changes.
    - **Mark damage repaired (built 2026-11-11, migration 006):** damage on file (§4 item 3) used to build up forever, even

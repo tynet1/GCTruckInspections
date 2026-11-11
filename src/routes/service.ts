@@ -30,11 +30,35 @@ export const AUTO_TICK: Record<string, { match: string; not?: string; sections: 
 
 /** Fields an entry has, in the order the history shows them. */
 const FIELDS = [
-  "service_date", "mileage", "category", "description", "parts", "cost", "performed_by", "vendor",
-  "notes", "next_due_mileage", "next_due_date",
+  "service_date", "mileage", "work", "description", "parts", "cost", "performed_by", "vendor", "notes",
 ] as const;
-type Field = (typeof FIELDS)[number];
-type Fields = Partial<Record<Field, string | number | null>>;
+/** Fields plus the old single-type columns, which mirror the first type of work (007). */
+type Fields = Record<string, unknown>;
+
+/** One type of work on an entry, with its own next-due. */
+export interface WorkItem { type: string; next_due_mileage: number | null; next_due_date: string | null }
+
+/** An entry's types of work; rows from before 007 (history) only have the single-type columns. */
+export function workOf(row: Record<string, unknown>): WorkItem[] {
+  const raw = Array.isArray(row.work) ? row.work as Record<string, unknown>[]
+    : [{ type: row.category, next_due_mileage: row.next_due_mileage, next_due_date: row.next_due_date }];
+  return raw.map((w) => ({
+    type: String(w.type ?? "other"),
+    next_due_mileage: w.next_due_mileage == null ? null : Number(w.next_due_mileage),
+    next_due_date: w.next_due_date ? String(w.next_due_date).slice(0, 10) : null,
+  }));
+}
+const sameWork = (a: WorkItem[], b: WorkItem[]) => JSON.stringify(a) === JSON.stringify(b);
+export const workLabel = (work: WorkItem[]) => work.map((w) => CATEGORIES[w.type] ?? w.type).join(", ");
+const usDate = (s: string) => { const [y, m, d] = s.split("-"); return `${+m}/${+d}/${y}`; };
+/** "Oil change (next due 61,200 mi or 5/10/2027), Tires" for the edit history. */
+function workText(work: WorkItem[]) {
+  return work.map((w) => {
+    const due = [w.next_due_mileage != null ? `${w.next_due_mileage.toLocaleString("en-US")} mi` : "",
+      w.next_due_date ? usDate(w.next_due_date) : ""].filter(Boolean).join(" or ");
+    return `${CATEGORIES[w.type] ?? w.type}${due ? ` (next due ${due})` : ""}`;
+  }).join(", ");
+}
 
 const canRead = { preHandler: requireRole("supervisor", "shop") };
 const canWrite = { preHandler: requireRole("admin", "shop") };
@@ -65,10 +89,13 @@ export function parseFields(b: Record<string, unknown>, creating: boolean): Fiel
     f.service_date = d;
   }
   if (has("mileage")) f.mileage = int(b.mileage, "Mileage", 0, 9_999_999);
-  if (has("category")) {
-    const c = String(b.category ?? "");
-    if (!CATEGORIES[c]) throw bad("Pick the type of work.");
-    f.category = c;
+  const work = parseWork(b, creating);
+  if (work) {
+    f.work = work;
+    // The old single-type columns mirror the first type, for anything older that still reads them.
+    f.category = work[0].type;
+    f.next_due_mileage = work[0].next_due_mileage;
+    f.next_due_date = work[0].next_due_date;
   }
   if (has("description")) f.description = reqStr(b.description, "Work done", 2000);
   if (b.parts !== undefined) f.parts = str(b.parts, "Parts", 2000);
@@ -76,13 +103,45 @@ export function parseFields(b: Record<string, unknown>, creating: boolean): Fiel
   if (b.performed_by !== undefined) f.performed_by = str(b.performed_by, "Done by", 100);
   if (b.vendor !== undefined) f.vendor = str(b.vendor, "Vendor", 100);
   if (b.notes !== undefined) f.notes = str(b.notes, "Notes", 5000);
-  if (b.next_due_mileage !== undefined) {
-    f.next_due_mileage = b.next_due_mileage === null || b.next_due_mileage === ""
-      ? null : int(b.next_due_mileage, "Next due mileage", 0, 9_999_999);
-  }
-  if (b.next_due_date !== undefined) f.next_due_date = optDate(b.next_due_date, "Next due date");
   return f;
 }
+
+/**
+ * Types of work: `work` = [{type, next_due_mileage?, next_due_date?}], at least one, each type once.
+ * Older copies of the app (and saves queued on a phone before 007) send category + next_due_* instead; that becomes
+ * a list of one, so nothing they saved is refused.
+ */
+function parseWork(b: Record<string, unknown>, creating: boolean): WorkItem[] | undefined {
+  let raw = b.work;
+  if (raw === undefined && b.category !== undefined) {
+    raw = [{ type: b.category, next_due_mileage: b.next_due_mileage, next_due_date: b.next_due_date }];
+  }
+  if (raw === undefined) {
+    if (creating) throw bad("Pick the type of work.");
+    return undefined;
+  }
+  if (!Array.isArray(raw) || !raw.length) throw bad("Pick the type of work.");
+  if (raw.length > Object.keys(CATEGORIES).length) throw bad("Too many types of work.");
+  const seen = new Set<string>();
+  return raw.map((x) => {
+    const o = obj(x, "type of work");
+    const type = String(o.type ?? "");
+    if (!CATEGORIES[type]) throw bad("Pick the type of work.");
+    if (seen.has(type)) throw bad(`${CATEGORIES[type]} is picked twice.`);
+    seen.add(type);
+    const label = CATEGORIES[type];
+    return {
+      type,
+      next_due_mileage: o.next_due_mileage == null || o.next_due_mileage === ""
+        ? null : int(o.next_due_mileage, `${label}: next due mileage`, 0, 9_999_999),
+      next_due_date: optDate(o.next_due_date, `${label}: next due date`),
+    };
+  });
+}
+
+/** SQL placeholder and value for a column (work is stored as jsonb). */
+const ph = (k: string, n: number) => (k === "work" ? `$${n}::jsonb` : `$${n}`);
+const val = (k: string, v: unknown) => (k === "work" ? JSON.stringify(v) : v);
 
 function idList(v: unknown, field: string, max: number): number[] {
   if (v == null) return [];
@@ -278,14 +337,22 @@ export async function loadEntry(id: number) {
       changed_at: h.changed_at,
       changed_by_name: h.changed_by_name,
       voided,
-      changes: voided ? [] : FIELDS.filter((f) => !same(before[f], after[f])).map((f) => ({ field: f, from: before[f] ?? null, to: after[f] ?? null })),
+      changes: voided ? [] : FIELDS.filter((f) => (f === "work" ? !sameWork(workOf(before), workOf(after)) : !same(before[f], after[f])))
+        .map((f) => (f === "work"
+          ? { field: f, from: workText(workOf(before)), to: workText(workOf(after)) }
+          : { field: f, from: before[f] ?? null, to: after[f] ?? null })),
     };
   });
   return {
     id: e.id,
     vehicle: { id: e.vehicle_id, truck_code: e.truck_code, year: e.year, make: e.make, model: e.model },
     ...Object.fromEntries(FIELDS.map((f) => [f, e[f] ?? null])),
-    category_label: CATEGORIES[e.category] ?? e.category,
+    work: workOf(e).map((w) => ({ ...w, label: CATEGORIES[w.type] ?? w.type })),
+    // Older copies of the app read the single-type fields; they mirror the first type of work.
+    category: e.category,
+    next_due_mileage: e.next_due_mileage ?? null,
+    next_due_date: e.next_due_date ?? null,
+    category_label: workLabel(workOf(e)),
     version: e.version,
     created_at: e.created_at,
     created_by_name: e.created_by_name,
@@ -308,7 +375,8 @@ export interface MaintenanceEntry {
   service_date: string;
   mileage: number | null;
   category: string;
-  category_label: string;
+  category_label: string;   // every type of work, e.g. "Oil change, Tires"
+  work: WorkItem[];
   description: string;
   parts: string | null;
   cost: number | null;
@@ -325,7 +393,7 @@ export interface MaintenanceEntry {
 
 export async function maintenanceForInspection(inspectionId: string): Promise<MaintenanceEntry[]> {
   const entries = await q(
-    `SELECT DISTINCT s.id, s.service_date, s.mileage, s.category, s.description, s.parts, s.cost, s.performed_by,
+    `SELECT DISTINCT s.id, s.service_date, s.mileage, s.category, s.work, s.description, s.parts, s.cost, s.performed_by,
             s.vendor, s.notes, s.created_at, cu.name AS created_by_name,
             (SELECT count(*) FROM service_log_history h WHERE h.service_log_id = s.id)::int AS edits
        FROM service_log_repairs r
@@ -351,7 +419,8 @@ export async function maintenanceForInspection(inspectionId: string): Promise<Ma
   );
   return entries.map((e) => ({
     ...e,
-    category_label: CATEGORIES[e.category] ?? e.category,
+    work: workOf(e),
+    category_label: workLabel(workOf(e)),
     repairs: repairs.filter((r) => r.service_log_id === e.id && r.here).map(({ id, label, note }) => ({ id, label, note })),
     other_repairs: repairs.filter((r) => r.service_log_id === e.id && !r.here).length,
     photos: photos.filter((p) => p.service_log_id === e.id).map(({ id, caption, file_path }) => ({ id, caption, file_path })),
@@ -359,12 +428,12 @@ export async function maintenanceForInspection(inspectionId: string): Promise<Ma
 }
 
 const LIST_COLS = `
-  s.id, s.vehicle_id, v.truck_code, s.service_date, s.mileage, s.category, s.description, s.cost,
+  s.id, s.vehicle_id, v.truck_code, s.service_date, s.mileage, s.category, s.work, s.description, s.cost,
   s.performed_by, s.vendor, (s.voided_at IS NOT NULL) AS voided,
   (SELECT count(*) FROM service_log_repairs r WHERE r.service_log_id = s.id AND r.active)::int AS repair_count,
   (SELECT count(*) FROM photos p WHERE p.service_log_id = s.id)::int AS photo_count`;
 
-const withLabel = <T extends { category: string }>(r: T) => ({ ...r, category_label: CATEGORIES[r.category] ?? r.category });
+const withLabel = <T extends Record<string, unknown>>(r: T) => ({ ...r, category_label: workLabel(workOf(r)) });
 
 class DuplicateSave extends Error {}
 
@@ -388,15 +457,17 @@ export default async function serviceRoutes(app: FastifyInstance) {
          (SELECT max(mileage) FROM service_logs WHERE vehicle_id = $1 AND voided_at IS NULL)) AS miles`,
       [vid],
     );
-    // Next due per type of work: from the newest live entry of that type (an older due date is out of date).
+    // Next due per type of work: from the newest live entry with that type (an older due date is out of date).
+    // An entry can have several types, each with its own next-due.
     const due = await q(
-      `SELECT * FROM (
-         SELECT DISTINCT ON (category) id, category, service_date, next_due_mileage, next_due_date,
-                (next_due_date <= current_date) AS date_due, (next_due_date <= current_date + 14) AS date_soon
-           FROM service_logs WHERE vehicle_id = $1 AND voided_at IS NULL
-          ORDER BY category, service_date DESC, id DESC) d
-        WHERE next_due_mileage IS NOT NULL OR next_due_date IS NOT NULL
-        ORDER BY category`,
+      `SELECT d.*, (d.next_due_date <= current_date) AS date_due, (d.next_due_date <= current_date + 14) AS date_soon FROM (
+         SELECT DISTINCT ON (w->>'type') s.id, w->>'type' AS category, s.service_date,
+                (w->>'next_due_mileage')::int AS next_due_mileage, (w->>'next_due_date')::date AS next_due_date
+           FROM service_logs s CROSS JOIN LATERAL jsonb_array_elements(s.work) w
+          WHERE s.vehicle_id = $1 AND s.voided_at IS NULL
+          ORDER BY w->>'type', s.service_date DESC, s.id DESC) d
+        WHERE d.next_due_mileage IS NOT NULL OR d.next_due_date IS NOT NULL
+        ORDER BY d.category`,
       [vid],
     );
     const miles = current?.miles ?? null;
@@ -453,9 +524,9 @@ export default async function serviceRoutes(app: FastifyInstance) {
         const cols: Record<string, unknown> = { ...f, vehicle_id: vehicleId, client_id: clientId, created_by: user.id, updated_by: user.id };
         const keys = Object.keys(cols);
         const ins = await c.query(
-          `INSERT INTO service_logs (${keys.join(", ")}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(", ")})
+          `INSERT INTO service_logs (${keys.join(", ")}) VALUES (${keys.map((k, i) => ph(k, i + 1)).join(", ")})
            ON CONFLICT (client_id) DO NOTHING RETURNING id`,
-          Object.values(cols),
+          keys.map((k) => val(k, cols[k])),
         );
         if (!ins.rows[0]) throw new DuplicateSave();
         const newId: number = ins.rows[0].id;
@@ -494,12 +565,12 @@ export default async function serviceRoutes(app: FastifyInstance) {
         throw new HttpError(409, "Someone changed this entry after you opened it. Reload it, check their changes, then make yours again.",
           { code: "stale" });
       }
-      const changed = (Object.keys(f) as Field[]).filter((k) => !same(cur[k], f[k]));
+      const changed = Object.keys(f).filter((k) => (k === "work" ? !sameWork(workOf(cur), f.work as WorkItem[]) : !same(cur[k], f[k])));
       if (changed.length || repairs.length || damage.length || photos.length) {
         // Even an edit that only adds photos or repairs bumps the version and records who did it.
         await c.query(
-          `UPDATE service_logs SET ${[...changed.map((k, i) => `${k} = $${i + 3}`), "updated_by = $2"].join(", ")} WHERE id = $1`,
-          [id, user.id, ...changed.map((k) => f[k])],
+          `UPDATE service_logs SET ${[...changed.map((k, i) => `${k} = ${ph(k, i + 3)}`), "updated_by = $2"].join(", ")} WHERE id = $1`,
+          [id, user.id, ...changed.map((k) => val(k, f[k]))],
         );
       }
       const work = String(f.description ?? cur.description);

@@ -1,7 +1,7 @@
 import type { Browser } from "playwright";
 import { getBranding } from "./branding.ts";
 import { readDiagram } from "./diagrams.ts";
-import { maintenanceForInspection } from "./routes/service.ts";
+import { CATEGORIES, maintenanceForInspection } from "./routes/service.ts";
 import type { MaintenanceEntry } from "./routes/service.ts";
 import { files } from "./storage.ts";
 
@@ -194,6 +194,9 @@ function maintenanceSection(list: MaintenanceEntry[]) {
     const fixed = m.repairs.map((r) => `${esc(r.label)}${r.note ? ` <span class="rnote">(${esc(r.note)})</span>` : ""}`).join("<br>")
       + (m.other_repairs ? `<br><span class="muted">Also fixed ${m.other_repairs} repair${m.other_repairs > 1 ? "s" : ""} from other inspections.</span>` : "");
     const who = [m.performed_by ? esc(m.performed_by) : "", m.vendor ? `outside shop: ${esc(m.vendor)}` : ""].filter(Boolean).join(" · ");
+    const nextDue = m.work.filter((w) => w.next_due_mileage != null || w.next_due_date).map((w) =>
+      `${esc(CATEGORIES[w.type] ?? w.type)}: ${[w.next_due_mileage != null ? `${w.next_due_mileage.toLocaleString("en-US")} mi` : "",
+        w.next_due_date ? fmtDate(w.next_due_date) : ""].filter(Boolean).join(" or ")}`).join("<br>");
     const logged = `${fmtDate(m.created_at)}${m.created_by_name ? ` by ${esc(m.created_by_name)}` : ""}${
       m.edits ? ` · changed ${m.edits} time${m.edits > 1 ? "s" : ""} after that (history in the app)` : ""}`;
     return `<table class="grid mt">
@@ -204,6 +207,7 @@ function maintenanceSection(list: MaintenanceEntry[]) {
       ${row("Work done", esc(m.description))}
       ${row("Parts", esc(m.parts ?? ""))}
       ${row("Notes", esc(m.notes ?? ""))}
+      ${row("Next due", nextDue)}
       ${row("Logged", logged)}
     </table>`;
   }).join("")}</section>`;

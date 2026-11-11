@@ -192,6 +192,9 @@ body.has-bar .netbar{bottom:calc(69px + env(safe-area-inset-bottom))}
 .list .item .grow{flex:1;min-width:0}
 .clip{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .list .item.voided{opacity:.6}
+/* Several types of work, each with its own next-due */
+.nextrow b{display:block;margin-bottom:6px}
+.nextrow+.nextrow{border-top:1px solid var(--line);margin-top:12px;padding-top:12px}
 /* Damage repaired */
 .dmgfix{border-top:1px solid var(--line)}
 .dmgfix:first-child{border-top:0}

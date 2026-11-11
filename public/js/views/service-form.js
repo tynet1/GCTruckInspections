@@ -45,6 +45,7 @@ export async function render(app, mode, id, fixKind, fixId) {
   if (draft?.status === "queued") return void location.replace(`#/truck/${vehicle.id}`);
   if (!draft) draft = isEdit ? draftFromEntry(key, entry) : newDraft(key, vehicle);
   if (!draft.damage) draft.damage = []; // drafts saved before damage fixes existed
+  upgradeDraft(draft);
   d = draft;
   setActiveSvc(d);
   ctx = {
@@ -72,22 +73,35 @@ export async function leave() {
   saving = false;
 }
 
+// A draft's types of work: types = ["oil_change", "tires"] in the order picked; next = { oil_change: { miles, date } }.
 function newDraft(key, v) {
   return {
     key, vehicleId: v.id, truckCode: v.truck_code, clientId: uuid(), status: "editing", touched: false,
-    date: today(), mileage: "", category: "", description: "", parts: "", cost: "",
-    performedBy: state.user?.name || "", vendor: "", notes: "", nextMiles: "", nextDate: "",
+    date: today(), mileage: "", types: [], next: {}, description: "", parts: "", cost: "",
+    performedBy: state.user?.name || "", vendor: "", notes: "",
     repairs: [], damage: [], photos: [], lastError: null,
   };
+}
+
+/** Drafts saved on the phone before several types were allowed had one category and one next-due. */
+function upgradeDraft(dr) {
+  if (Array.isArray(dr.types)) return;
+  dr.types = dr.category ? [dr.category] : [];
+  dr.next = dr.category ? { [dr.category]: { miles: String(dr.nextMiles ?? ""), date: dr.nextDate || "" } } : {};
+  delete dr.category;
+  delete dr.nextMiles;
+  delete dr.nextDate;
 }
 
 function draftFromEntry(key, e) {
   return {
     key, vehicleId: e.vehicle.id, truckCode: e.vehicle.truck_code, entryId: e.id, version: e.version,
     status: "editing", touched: false,
-    date: e.service_date, mileage: e.mileage ?? "", category: e.category, description: e.description || "",
+    date: e.service_date, mileage: e.mileage ?? "", description: e.description || "",
+    types: e.work.map((w) => w.type),
+    next: Object.fromEntries(e.work.map((w) => [w.type, { miles: w.next_due_mileage == null ? "" : String(w.next_due_mileage), date: w.next_due_date || "" }])),
     parts: e.parts || "", cost: e.cost == null ? "" : Number(e.cost).toFixed(2), performedBy: e.performed_by || "",
-    vendor: e.vendor || "", notes: e.notes || "", nextMiles: e.next_due_mileage ?? "", nextDate: e.next_due_date || "",
+    vendor: e.vendor || "", notes: e.notes || "",
     repairs: [], damage: [], photos: [], lastError: null,
   };
 }
@@ -102,13 +116,13 @@ function repairsHtml() {
   const linked = linkedRepairs();
   const open = openRepairs();
   const auto = d.autoRepairs || [];
-  const catLabel = ctx.categories.find((c) => c.id === d.category)?.label || "";
+  const matchedBy = (id) => ctx.categories.find((c) => d.types.includes(c.id) && autoMatches(c.id).includes(id))?.label || "";
   let h = linked.map((r) => `<div class="pick done"><span class="tick">✓</span><span><b>${esc(r.label)}</b><br>
       <span class="small muted">Fixed by this entry · from ${fmtDate(r.inspection_date)} inspection</span></span></div>`).join("");
   if (!open.length) return h || `<span class="muted">No open repairs on ${esc(ctx.vehicle.truck_code)}.</span>`;
   h += open.map((r) => `<label class="pick"><input type="checkbox" data-rep="${r.id}" ${d.repairs.includes(r.id) ? "checked" : ""}>
       <span><b>${esc(r.label)}</b> <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span>
-      ${auto.includes(r.id) && d.repairs.includes(r.id) ? `<span class="pill">Matches ${esc(catLabel)}</span>` : ""}<br>
+      ${auto.includes(r.id) && d.repairs.includes(r.id) ? `<span class="pill">Matches ${esc(matchedBy(r.id))}</span>` : ""}<br>
       <span class="small muted">${r.note ? `${esc(r.note)} · ` : ""}from ${fmtDate(r.inspection_date)} inspection</span></span></label>`).join("");
   h += `<p class="small muted" style="margin:8px 0 0">Ticked repairs are marked fixed when you save${
     auto.some((id) => d.repairs.includes(id)) ? ". Repairs that match the type of work are ticked for you; untick any you didn't fix." : "."}</p>`;
@@ -131,15 +145,16 @@ function autoMatches(category) {
     .map((r) => r.id);
 }
 
-/** Picking a type of work ticks the matching repairs; ticks the shop made by hand are never removed. */
-function applyAuto(category) {
+/** The picked types of work tick the repairs that match any of them; ticks the shop made by hand are never removed. */
+function applyAuto() {
   const prevAuto = d.autoRepairs || [];
   const manual = d.repairs.filter((id) => !prevAuto.includes(id));
-  const auto = autoMatches(category).filter((id) => !manual.includes(id));
+  const auto = [...new Set(d.types.flatMap((ty) => autoMatches(ty)))].filter((id) => !manual.includes(id));
+  const added = auto.filter((id) => !prevAuto.includes(id)).length;
   d.repairs = [...manual, ...auto];
   d.autoRepairs = auto;
   redrawRepairs();
-  if (auto.length) toast(`Ticked ${auto.length} matching repair${auto.length > 1 ? "s" : ""}. Untick any you didn't fix.`, 3500);
+  if (added) toast(`Ticked ${added} matching repair${added > 1 ? "s" : ""}. Untick any you didn't fix.`, 3500);
 }
 
 /** Came from a repair's "Log fix" button: tick it, and pick the type of work if none is chosen yet. */
@@ -148,12 +163,32 @@ function startFix(itemId) {
   if (!item) return;
   if (!d.repairs.includes(itemId)) d.repairs.push(itemId);
   d.autoRepairs = (d.autoRepairs || []).filter((id) => id !== itemId); // a deliberate pick, not a suggestion
-  if (!d.category) {
-    d.category = ctx.categories.find((c) => c.auto && autoMatches(c.id).includes(itemId))?.id || "repair";
+  if (!d.types.length) {
+    d.types = [ctx.categories.find((c) => c.auto && autoMatches(c.id).includes(itemId))?.id || "repair"];
   }
   d.touched = true;
   saveSvcDraft(d);
 }
+
+// ---------- Next due, one per type of work ----------
+
+const typeLabel = (id) => ctx.categories.find((c) => c.id === id)?.label || id;
+
+function nextHtml() {
+  if (!d.types.length) return `<span class="muted">Pick the type of work first. Each type can have its own next-due.</span>`;
+  return d.types.map((ty) => {
+    const n = d.next[ty] || {};
+    return `<div class="nextrow"><b>${esc(typeLabel(ty))}</b><div class="fields">
+      <div><label class="f" for="s-nmi-${ty}">At mileage</label><input class="t" id="s-nmi-${ty}" data-nmi="${ty}" inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="${esc(n.miles || "")}" placeholder="Optional"></div>
+      <div><label class="f" for="s-nd-${ty}">Or by date</label><input class="t" id="s-nd-${ty}" data-nd="${ty}" type="date" value="${esc(n.date || "")}"></div>
+    </div></div>`;
+  }).join("") + `<p class="small muted" style="margin:8px 0 0">Each shows on the truck page, and turns orange when it's close.</p>`;
+}
+
+const redrawNext = () => {
+  const el = $("#s-next");
+  if (el) el.innerHTML = nextHtml();
+};
 
 // ---------- Damage this fixed (SPEC §9: a photo of the fixed area is required for each) ----------
 
@@ -191,7 +226,7 @@ const redrawDamage = () => {
 function startFixDamage(markId) {
   if (!openDamage().some((m) => m.id === markId)) return;
   if (!d.damage.includes(markId)) d.damage.push(markId);
-  if (!d.category) d.category = "repair";
+  if (!d.types.length) d.types = ["repair"];
   d.touched = true;
   saveSvcDraft(d);
 }
@@ -210,8 +245,11 @@ function draw() {
       <div><label class="f" for="s-mi">Mileage</label><input class="t" id="s-mi" inputmode="numeric" pattern="[0-9]*" autocomplete="off"
         value="${esc(d.mileage)}" placeholder="${ctx.currentMiles != null ? `Last: ${fmtNum(ctx.currentMiles)}` : ""}"><div class="hint" id="s-miWarn"></div></div>
     </div>
-    <label class="f" style="margin-top:14px">Type of work</label>
-    <div class="chips" id="s-cat">${ctx.categories.map((c) => `<button type="button" data-cat="${c.id}" class="${d.category === c.id ? "on" : ""}" aria-pressed="${d.category === c.id}">${esc(c.label)}</button>`).join("")}</div>
+    <label class="f" style="margin-top:14px">Type of work <span class="muted" style="font-weight:400">(pick all that apply)</span></label>
+    <div class="chips" id="s-cat">${ctx.categories.map((c) => {
+      const on = d.types.includes(c.id);
+      return `<button type="button" data-cat="${c.id}" class="${on ? "on" : ""}" aria-pressed="${on}">${on ? "✓ " : ""}${esc(c.label)}</button>`;
+    }).join("")}</div>
     <label class="f" for="s-work" style="margin-top:14px">Work done</label>
     <textarea class="t" id="s-work" placeholder="e.g. Changed oil and filter, topped off coolant">${esc(d.description)}</textarea>
     <label class="f" for="s-parts" style="margin-top:12px">Parts used</label>
@@ -226,10 +264,7 @@ function draw() {
   h += `<h2>Repairs this fixed</h2><div class="card" id="s-repairs">${repairsHtml()}</div>`;
   if (openDamage().length || linkedDamage().length) h += `<h2>Damage this fixed</h2><div class="card" id="s-damage">${damageHtml()}</div>`;
 
-  h += `<h2>Next service due</h2><div class="card"><div class="fields">
-      <div><label class="f" for="s-nmi">At mileage</label><input class="t" id="s-nmi" inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="${esc(d.nextMiles)}" placeholder="Optional"></div>
-      <div><label class="f" for="s-ndate">Or by date</label><input class="t" id="s-ndate" type="date" value="${esc(d.nextDate)}"></div>
-    </div><p class="small muted" style="margin:8px 0 0">Shows on the truck page, and turns orange when it's close.</p></div>`;
+  h += `<h2>Next service due</h2><div class="card" id="s-next">${nextHtml()}</div>`;
 
   const oldPhotos = ctx.entry?.photos || [];
   h += `<h2>Photos</h2><div class="card">
@@ -301,19 +336,20 @@ function changed() {
 
 const FIELD_IDS = {
   "s-date": "date", "s-work": "description", "s-parts": "parts", "s-cost": "cost", "s-by": "performedBy",
-  "s-vendor": "vendor", "s-notes": "notes", "s-ndate": "nextDate",
+  "s-vendor": "vendor", "s-notes": "notes",
 };
 
 function wire() {
   const app = ctx.app;
   app.oninput = (e) => {
     const t = e.target;
-    if (t.id === "s-mi" || t.id === "s-nmi") {
+    if (t.id === "s-mi" || t.dataset.nmi) {
       const digits = t.value.replace(/\D/g, "").slice(0, 7);
       if (digits !== t.value) t.value = digits;
-      if (t.id === "s-mi") { d.mileage = digits; mileageWarn(); } else d.nextMiles = digits;
+      if (t.id === "s-mi") { d.mileage = digits; mileageWarn(); } else d.next[t.dataset.nmi] = { ...d.next[t.dataset.nmi], miles: digits };
       return changed();
     }
+    if (t.dataset.nd) { d.next[t.dataset.nd] = { ...d.next[t.dataset.nd], date: t.value }; return changed(); }
     if (FIELD_IDS[t.id]) { d[FIELD_IDS[t.id]] = t.value; return changed(); }
     if (t.dataset.phc) { const p = d.photos.find((x) => x.id === t.dataset.phc); if (p) p.caption = t.value; return changed(); }
   };
@@ -355,10 +391,16 @@ function wire() {
     const t = e.target.closest("button");
     if (!t) return;
     if (t.dataset.cat) {
-      if (d.category === t.dataset.cat) return;
-      d.category = t.dataset.cat;
-      $$("#s-cat button").forEach((b) => { b.classList.toggle("on", b === t); b.setAttribute("aria-pressed", String(b === t)); });
-      applyAuto(d.category);
+      const id = t.dataset.cat;
+      d.types = d.types.includes(id) ? d.types.filter((x) => x !== id) : [...d.types, id];
+      $$("#s-cat button").forEach((b) => {
+        const on = d.types.includes(b.dataset.cat);
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-pressed", String(on));
+        b.textContent = `${on ? "✓ " : ""}${typeLabel(b.dataset.cat)}`;
+      });
+      applyAuto();
+      redrawNext();
       return changed();
     }
     if (t.dataset.phx) {
@@ -418,7 +460,7 @@ function missingList() {
   const miss = [];
   if (!d.date) miss.push({ label: "date", sel: "#s-date" });
   if (d.mileage === "") miss.push({ label: "mileage", sel: "#s-mi" });
-  if (!d.category) miss.push({ label: "type of work", sel: "#s-cat" });
+  if (!d.types.length) miss.push({ label: "type of work", sel: "#s-cat" });
   if (!d.description.trim()) miss.push({ label: "work done", sel: "#s-work" });
   if (d.cost.trim() && !/^\$?\s*[\d,]{1,9}(\.\d{1,2})?$/.test(d.cost.trim())) miss.push({ label: "cost as an amount like 125.50", sel: "#s-cost" });
   for (const id of pickedDamage()) {
@@ -448,15 +490,17 @@ function buildPayload() {
   const fields = {
     service_date: d.date,
     mileage: Number(d.mileage),
-    category: d.category,
+    work: d.types.map((ty) => ({
+      type: ty,
+      next_due_mileage: d.next[ty]?.miles ? Number(d.next[ty].miles) : null,
+      next_due_date: d.next[ty]?.date || null,
+    })),
     description: d.description.trim(),
     parts: d.parts,
     cost: d.cost.trim(),
     performed_by: d.performedBy,
     vendor: d.vendor,
     notes: d.notes,
-    next_due_mileage: d.nextMiles === "" ? null : Number(d.nextMiles),
-    next_due_date: d.nextDate || null,
     repair_item_ids: d.repairs,
     damage_mark_ids: pickedDamage(),
     photos: d.photos.map((p) => ({
