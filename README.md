@@ -31,6 +31,7 @@ on the phone and upload when signal returns.
 | Batch PDF export: tick inspections, get one PDF each (zip, or share as separate files) | done |
 | Maintenance log: several types of work on one entry (multi-select, next-due per type) | designed (SPEC §9), not built |
 | Mark damage repaired (photo of the fix required; drops off the form's grey dots, kept on the truck page) | designed (SPEC §9), not built |
+| Archive or delete inspections (delete = recoverable, admin only, reason required) | proposed (SPEC §9), not built |
 | CSV export, repairs board, checklist editor | not started |
 
 ## Layout

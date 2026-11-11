@@ -205,6 +205,17 @@ POST /service-logs/:id/void         {reason}                                    
        when, who and the maintenance entry; nothing is deleted. Voiding that maintenance entry puts the damage back on file.
      - Data: an additive migration with a separate repairs record per mark (damage marks stay read-only, like inspections).
      - Feeds the lease-return checklist's "damage repaired" step in fleet management.
+   - **Archive or delete inspections (requested 2026-11-11, not started):** for mistakes (wrong truck, a duplicate, a test)
+     and for clearing old ones out of the lists. It has to fit §4a ("nothing is hard-deleted from the app"), so proposed:
+     - **Archive** (supervisor+): hides the inspection from home, truck history, the export list and sign-off lists. Still
+       opens from a link or an "Archived" filter, still exports to PDF, and can be un-archived.
+     - **Delete** (admin only, reason required): for inspections that should never have existed. It moves to a **Deleted**
+       list under Admin, where it can be restored; the app itself never erases it. Its repair items leave the open-repairs
+       lists and its pins leave "Damage on file" while it's deleted.
+     - The submitted inspection itself stays read-only (the database triggers don't change): archived/deleted state lives
+       in its own record (additive migration), with who, when and why, and every archive/delete/restore is kept as history.
+     - Open questions for Tyler: does archiving also take its open repairs and damage off the truck (or only deleting)?
+       Should anything ever be permanently erased, e.g. from a command-line tool after a backup, not from the app?
    - **Fleet management:** add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
      and the rest of the truck's lifecycle. Scope to confirm with Tyler before building; proposed:
      status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage
