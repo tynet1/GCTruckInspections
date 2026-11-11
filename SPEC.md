@@ -194,6 +194,15 @@ POST /service-logs/:id/void         {reason}                                    
        The old columns stay, so nothing already logged changes.
      - Everything that reads the type follows it: repair auto-ticking matches any selected type, lists and the inspection
        PDF show every type with its next-due, edit history shows type changes.
+   - **Mark damage repaired (requested 2026-11-11, not started):** damage on file (§4 item 3) builds up forever today, even
+     after the body shop fixes it. Proposed:
+     - Each mark in "Damage on file" on the truck page gets **Repaired**: shop/admin can **Log fix** (opens a maintenance entry
+       with that damage ticked, like repair items), and supervisors can mark it repaired with a short note.
+     - A repaired mark drops off the inspection form's grey dots. The truck page keeps it, greyed out, under "Repaired", with
+       when, who and the maintenance entry; nothing is deleted. Voiding that maintenance entry puts the damage back on file.
+     - Data: an additive migration with a separate repairs record per mark (damage marks stay read-only, like inspections).
+     - Feeds the lease-return checklist's "damage repaired" step in fleet management.
+     - **To confirm with Tyler before building:** whether marking repaired should need a photo of the fixed area.
    - **Fleet management:** add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
      and the rest of the truck's lifecycle. Scope to confirm with Tyler before building; proposed:
      status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage
