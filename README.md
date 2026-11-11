@@ -29,6 +29,7 @@ on the phone and upload when signal returns.
 | Maintenance log for the shop manager (`shop` role): log work per truck with mileage, parts, cost, photos; close inspection repairs; next-due mileage/date; edit history; void instead of delete; works offline | done |
 | Fleet management (lease details, statuses, lease-return prep, trailers as assets) | waiting on scope answers (SPEC §9) |
 | Batch PDF export: tick inspections, get one PDF each (zip, or share as separate files) | done |
+| Maintenance log: several types of work on one entry (multi-select) | not started; next-due question in SPEC §9 |
 | CSV export, repairs board, checklist editor | not started |
 
 ## Layout
