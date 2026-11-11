@@ -177,5 +177,13 @@ body.has-bar .netbar{bottom:calc(69px + env(safe-area-inset-bottom))}
 .list .item .grow{flex:1;min-width:0}
 .clip{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .list .item.voided{opacity:.6}
+/* Export PDFs */
+.h2row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:22px 4px 8px}
+.h2row h2{margin:0}
+.h2row .link{padding:0 6px;min-width:44px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;font-size:14px}
+.pick .grow{flex:1;min-width:0}
+.pick .pills{gap:6px;margin-top:4px}
+.dates{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.dates input.t{padding:12px 8px;min-width:0}
 .spinner{display:inline-block;width:18px;height:18px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle}
 @keyframes spin{to{transform:rotate(360deg)}}

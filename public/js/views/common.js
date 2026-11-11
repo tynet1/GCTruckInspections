@@ -55,21 +55,29 @@ export function repairButtons(r, vehicleId, { canLog, canResolve }) {
   return b.length ? `<div class="btncol">${b.join("")}</div>` : "";
 }
 
-/** One row in an inspection list (home "recent", truck history, awaiting sign-off). */
-export function inspectionRow(i, { showTruck = true } = {}) {
+/** An inspection's status pills: open repairs, mileage flag, not signed off yet. */
+export function inspectionPills(i) {
   const n = Number(i.repair_count || 0);
   const open = i.open_repair_count == null ? n : Number(i.open_repair_count);
   const status = open
     ? `<span class="pill bad">${open} open repair${open > 1 ? "s" : ""}</span>`
     : n ? `<span class="pill okk">✓ Repairs fixed</span>` : `<span class="pill okk">All OK</span>`;
-  return `<a class="item" href="#/inspection/${esc(i.id)}">
-    <span>${showTruck ? `<b>${esc(i.truck_code)}</b> · ` : ""}${fmtDate(i.inspection_date)}<br>
-      <span class="small muted">${esc(i.inspector_name || "")}${i.mileage != null ? ` · ${fmtNum(i.mileage)} mi` : ""}</span></span>
-    <span class="row" style="justify-content:flex-end">
-      ${status}
+  return `${status}
       ${i.mileage_flagged ? `<span class="pill warn">Mileage?</span>` : ""}
-      ${i.status === "reviewed" ? "" : `<span class="pill grey">Unreviewed</span>`}
-    </span></a>`;
+      ${i.status === "reviewed" ? "" : `<span class="pill grey">Unreviewed</span>`}`;
+}
+
+/** Truck (optional), date, then who and mileage on a second line. */
+export function inspectionTitle(i, { showTruck = true } = {}) {
+  return `${showTruck ? `<b>${esc(i.truck_code)}</b> · ` : ""}${fmtDate(i.inspection_date)}<br>
+      <span class="small muted">${esc(i.inspector_name || "")}${i.mileage != null ? ` · ${fmtNum(i.mileage)} mi` : ""}</span>`;
+}
+
+/** One row in an inspection list (home "recent", truck history, awaiting sign-off). */
+export function inspectionRow(i, { showTruck = true } = {}) {
+  return `<a class="item" href="#/inspection/${esc(i.id)}">
+    <span>${inspectionTitle(i, { showTruck })}</span>
+    <span class="row" style="justify-content:flex-end">${inspectionPills(i)}</span></a>`;
 }
 
 export const SECTION_TITLES = { exterior: "Exterior", interior: "Interior", trailer: "Trailer & crew" };

@@ -122,7 +122,14 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - Page 1 stays one page: the diagram shrinks (down to 1.9in) when repair notes, a long damage legend or long notes need the
   room. A sheet too busy even for that continues on the next page with the checklist header repeated, never leaving a
   blank page. Timestamps print in the server's time zone (TZ), not UTC.
-- Batch export (phase 2): pick a date range and optionally trucks; download **one separate PDF per inspection** (zipped, each named like a single export), not one combined PDF. Plus CSV export of inspections and repair items.
+- **Batch export (built):** Export PDFs screen (supervisor+, from the menu, home or a truck's history). Filter by truck and
+  dates (quick picks: last 7 days, this month, last month), then tick the inspections wanted (or Select all). Each becomes
+  **its own PDF**, named like a single export (`_2`, `_3` added if two share a name), never one combined PDF; saved together
+  in `inspections_<date>.zip`, or shared as separate PDFs where the phone supports sharing files (needs HTTPS).
+  The phone fetches the PDFs two at a time and retries each one on a weak signal, with progress and Cancel; any that still
+  fail are listed with "Try again", which fetches only those. Up to 100 per export; the list shows the newest 200.
+  The zip is built on the phone (`public/js/zip.js`, stored, no compression), so the server only ever makes single PDFs.
+- CSV export of inspections and repair items: not built yet.
 
 ## 7. API sketch
 
@@ -134,6 +141,7 @@ GET  /vehicles/:id        -> vehicle + open repairs + history
 GET  /vehicles/:id/last   -> last inspection (to prefill notes and grey pins)
 POST /photos              multipart -> {id}   (before submit; orphan cleanup after 7 days)
 POST /inspections         {client_id, ..., items[], damage[], photo_ids[]}
+GET  /inspections?limit&status&vehicle_id&from&to   (from/to: inclusive inspection dates, YYYY-MM-DD)
 GET  /inspections/:id
 POST /inspections/:id/review     {signature (png)}        supervisor+
 POST /inspection-items/:id/resolve {note}                 supervisor+
@@ -171,7 +179,7 @@ POST /service-logs/:id/void         {reason}                                    
      status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage
      allowance), a lease-return checklist (damage repaired, keys, documents, final inspection and photos), registration and
      insurance dates with reminders, and trailers as their own assets.
-   - **Batch PDF export as separate PDFs** (see §6), CSV export, repairs board, checklist editor.
+   - **Batch PDF export as separate PDFs (built, see §6).** Still to do: CSV export, repairs board, checklist editor.
 3. **Code review and hardening:** full code review; review and optimize performance while keeping stability; a burn-in test
    (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
 4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins;

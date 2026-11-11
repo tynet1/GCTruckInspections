@@ -7,6 +7,7 @@ import { atLeast, can, homeHeader, state } from "./ui.js";
 import { $, esc, modal, toast } from "./util.js";
 import * as admin from "./views/admin.js";
 import * as detail from "./views/detail.js";
+import * as exportView from "./views/export.js";
 import * as form from "./views/form.js";
 import * as home from "./views/home.js";
 import * as serviceDetail from "./views/service-detail.js";
@@ -21,6 +22,7 @@ const routes = [
   { re: /^#\/inspection\/([0-9a-f-]{36})$/i, view: detail },
   { re: /^#\/service\/(new|edit)\/(\d+)(?:\?fix=(\d+))?$/, view: serviceForm, allow: () => can.logService() },
   { re: /^#\/service\/(\d+)$/, view: serviceDetail, allow: () => can.seeService() },
+  { re: /^#\/export(?:\?truck=(\d+))?$/, view: exportView, role: "supervisor" },
   { re: /^#\/admin(?:\/(users|trucks|branding))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
 
@@ -88,6 +90,7 @@ export function openMenu() {
   const u = state.user;
   const m = modal(`<h3>${esc(u.name)}</h3><p class="muted small" style="margin-top:-8px">Signed in as ${esc(u.role)}</p>
     <div style="display:grid;gap:10px">
+      ${atLeast("supervisor") ? `<a class="secondary" href="#/export" data-close>Export PDFs</a>` : ""}
       ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks &amp; branding</a>` : ""}
       <button class="secondary danger" id="mSignOut">Sign out</button>
       <button class="secondary" data-close>Close</button>

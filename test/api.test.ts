@@ -332,6 +332,26 @@ if (!url) {
       assert.match(String(res.headers["content-disposition"]), /AZ018_2026-11-10_inspection\.pdf/);
       assert.equal(res.rawPayload.subarray(0, 4).toString(), "%PDF");
     });
+
+    test("the list filters by inspection date for the export screen", async () => {
+      const ids: string[] = [];
+      for (const d of ["2026-10-15", "2026-10-31"]) {
+        const res = await inject("POST", "/inspections", { cookie: crewCookie, body: submitBody({ inspection_date: d }) });
+        assert.equal(res.statusCode, 201, res.body);
+        ids.push(res.json().id);
+      }
+      const list = async (qs: string) => {
+        const res = await inject("GET", `/inspections?limit=200&${qs}`, { cookie: supCookie });
+        assert.equal(res.statusCode, 200, res.body);
+        return res.json() as { id: string; inspection_date: string }[];
+      };
+      const oct = await list("from=2026-10-01&to=2026-10-31");
+      assert.deepEqual(oct.map((r) => r.id).sort(), [...ids].sort(), "both ends of the range are included");
+      assert.deepEqual((await list("from=2026-10-20")).filter((r) => ids.includes(r.id)).map((r) => r.id), [ids[1]]);
+      assert.deepEqual((await list(`to=2026-10-20&vehicle_id=${vehicleId}`)).map((r) => r.id), [ids[0]]);
+      assert.equal((await inject("GET", "/inspections?from=2026-13-01", { cookie: supCookie })).statusCode, 400);
+      assert.equal((await inject("GET", "/inspections?to=yesterday", { cookie: supCookie })).statusCode, 400);
+    });
   });
 
   describe("admin", () => {

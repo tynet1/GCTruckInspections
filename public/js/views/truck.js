@@ -60,7 +60,9 @@ export async function render(app, id) {
         ${repairButtons(r, v.id, who)}</div></li>`).join("")}</ul>`
     : `<span class="muted">No open repairs.</span>`}</div>`;
   if (svc) h += serviceSection(v, svc, svcDraft);
-  h += `<h2>Inspection history</h2><div class="card list">${history.length
+  h += `${atLeast("supervisor") && history.length
+    ? `<div class="h2row"><h2>Inspection history</h2><a class="link" href="#/export?truck=${v.id}">Export PDFs</a></div>`
+    : `<h2>Inspection history</h2>`}<div class="card list">${history.length
     ? history.map((i) => inspectionRow(i, { showTruck: false })).join("")
     : `<div class="empty">No inspections yet.</div>`}</div>`;
   app.innerHTML = h;

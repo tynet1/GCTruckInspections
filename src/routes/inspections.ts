@@ -318,6 +318,14 @@ export default async function inspectionRoutes(app: FastifyInstance) {
       params.push(Number(qs.vehicle_id));
       where.push(`i.vehicle_id = $${params.length}`);
     }
+    // Inspection date range (inclusive), for the export screen.
+    for (const [key, op] of [["from", ">="], ["to", "<="]] as const) {
+      const v = qs[key];
+      if (!v) continue;
+      if (!isValidDate(v)) throw bad(`"${key}" must be a date like 2026-11-10.`);
+      params.push(v);
+      where.push(`i.inspection_date ${op} $${params.length}::date`);
+    }
     params.push(limit);
     return q(
       `SELECT i.id, i.vehicle_id, v.truck_code, i.inspection_date, i.inspector_name, i.mileage, i.status, i.mileage_flagged,

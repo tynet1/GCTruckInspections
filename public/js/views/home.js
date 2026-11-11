@@ -10,7 +10,10 @@ let query = "";
 
 /** Recent inspections, plus recent maintenance for those who can see it (first, for the shop manager). */
 function recentBlocks() {
-  const insp = `<h2>Recent inspections</h2><div class="card list" id="recent"><div class="empty">Loading…</div></div>`;
+  const head = atLeast("supervisor")
+    ? `<div class="h2row"><h2>Recent inspections</h2><a class="link" href="#/export">Export PDFs</a></div>`
+    : `<h2>Recent inspections</h2>`;
+  const insp = `${head}<div class="card list" id="recent"><div class="empty">Loading…</div></div>`;
   if (!can.seeService()) return insp;
   const svc = `<h2>Recent maintenance</h2><div class="card list" id="recentSvc"><div class="empty">Loading…</div></div>`;
   return state.user.role === "shop" ? svc + insp : insp + svc;
