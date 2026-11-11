@@ -800,4 +800,142 @@ if (!url) {
       await q(`DELETE FROM photos WHERE id = $1`, [loose.id]); // a never-attached upload can still be cleaned up
     });
   });
+
+  describe("damage repaired", () => {
+    let truckId = 0;
+    let shopCookie = "";
+    let adminCookie = "";
+    const marks: Record<string, number> = {};
+    const onFile = async () =>
+      ((await inject("GET", `/vehicles/${truckId}/last`, { cookie: crewCookie })).json().damage as { id: number }[]).map((m) => m.id);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const markOf = async (id: number): Promise<any> =>
+      (await inject("GET", `/vehicles/${truckId}`, { cookie: supCookie })).json().damage.find((m: { id: number }) => m.id === id);
+
+    before(async () => {
+      const t = await one(`SELECT id FROM vehicles WHERE truck_code NOT IN ('AZ018', 'AZ002') ORDER BY id OFFSET 1 LIMIT 1`);
+      truckId = t.id;
+      const shop = await one(`SELECT id FROM users WHERE name = 'Frank Shop'`);
+      shopCookie = cookieOf(await inject("POST", "/auth/pin", { body: { user_id: shop.id, pin: "1357" } }));
+      adminCookie = cookieOf(await inject("POST", "/auth/login", { body: { email: "admin@test.local", password: "admin-password-1" } }));
+      const res = await inject("POST", "/inspections", {
+        cookie: crewCookie,
+        body: submitBody({
+          vehicle_id: truckId, mileage: 20000,
+          damage: [
+            { key: "a", diagram: "truck", x: 0.2, y: 0.3, note: "Dented door" },
+            { key: "b", diagram: "truck", x: 0.7, y: 0.6, note: "Cracked tail light lens" },
+          ],
+        }),
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      for (const m of await q(`SELECT id, note FROM damage_marks WHERE inspection_id = $1`, [res.json().id])) marks[m.note] = m.id;
+    });
+
+    test("a supervisor marks damage repaired with a note and a photo; it leaves the grey dots", async () => {
+      const door = marks["Dented door"];
+      const url = `/damage-marks/${door}/repair`;
+      const body = (photoIds: string[], over: Record<string, unknown> = {}) => ({ client_id: randomUUID(), note: "Body shop pulled it", photo_ids: photoIds, ...over });
+      assert.equal((await inject("POST", url, { cookie: crewCookie, body: body([randomUUID()]) })).statusCode, 403);
+      assert.equal((await inject("POST", url, { cookie: shopCookie, body: body([randomUUID()]) })).statusCode, 403, "the shop uses Log fix");
+      assert.equal((await inject("POST", url, { cookie: supCookie, body: body([]) })).statusCode, 400, "photo required");
+      assert.equal((await inject("POST", url, { cookie: supCookie, body: body([randomUUID()], { note: " " }) })).statusCode, 400, "note required");
+      const notUp = await inject("POST", url, { cookie: supCookie, body: body([randomUUID()]) });
+      assert.equal(notUp.statusCode, 422);
+      assert.equal(notUp.json().details.code, "photos_missing");
+
+      const { id: photoId } = await uploadPhoto(supCookie);
+      const ok = body([photoId]);
+      const a = await inject("POST", url, { cookie: supCookie, body: ok });
+      assert.equal(a.statusCode, 201, a.body);
+      const again = await inject("POST", url, { cookie: supCookie, body: ok });
+      assert.equal(again.statusCode, 200, "a retried save is a no-op");
+      assert.equal(again.json().id, a.json().id);
+      const { id: p2 } = await uploadPhoto(supCookie);
+      assert.equal((await inject("POST", url, { cookie: supCookie, body: body([p2]) })).statusCode, 409, "already repaired");
+
+      assert.deepEqual(await onFile(), [marks["Cracked tail light lens"]]);
+      const m = await markOf(door);
+      assert.equal(m.repair.note, "Body shop pulled it");
+      assert.equal(m.repair.repaired_by_name, "Sam Super");
+      assert.equal(m.repair.service_log_id, null);
+      assert.deepEqual(m.repair.photos.map((p: { id: string }) => p.id), [photoId]);
+    });
+
+    test("undo puts it back on file; the repair and its photo are kept", async () => {
+      const door = marks["Dented door"];
+      const repairId = (await markOf(door)).repair.id;
+      assert.equal((await inject("POST", `/damage-repairs/${repairId}/undo`, { cookie: crewCookie, body: { reason: "x" } })).statusCode, 403);
+      assert.equal((await inject("POST", `/damage-repairs/${repairId}/undo`, { cookie: supCookie, body: {} })).statusCode, 400, "reason required");
+      assert.equal((await inject("POST", `/damage-repairs/${repairId}/undo`, { cookie: supCookie, body: { reason: "Wrong dent" } })).statusCode, 200);
+      assert.equal((await inject("POST", `/damage-repairs/${repairId}/undo`, { cookie: supCookie, body: { reason: "x" } })).statusCode, 409);
+      assert.deepEqual((await onFile()).sort(), Object.values(marks).sort());
+      const kept = await one(`SELECT active, end_reason, (SELECT count(*) FROM photos WHERE damage_repair_id = $1) AS photos FROM damage_repairs WHERE id = $1`, [repairId]);
+      assert.equal(kept.active, false);
+      assert.equal(kept.end_reason, "Undone: Wrong dent");
+      assert.equal(kept.photos, 1);
+    });
+
+    test("the shop's Log fix needs a photo of the fixed area; voiding the entry puts the damage back on file", async () => {
+      const lens = marks["Cracked tail light lens"];
+      const entry = (over: Record<string, unknown>) => ({
+        client_id: randomUUID(), vehicle_id: truckId, service_date: "2026-11-10", mileage: 20100, category: "repair",
+        description: "Replaced tail light lens", damage_mark_ids: [lens], ...over,
+      });
+      const noPhoto = await inject("POST", "/service-logs", { cookie: shopCookie, body: entry({}) });
+      assert.equal(noPhoto.statusCode, 422, noPhoto.body);
+      assert.equal(noPhoto.json().details.code, "damage_photo_missing");
+      const { id: receipt } = await uploadPhoto(shopCookie);
+      const untagged = await inject("POST", "/service-logs", { cookie: shopCookie, body: entry({ photos: [{ id: receipt, caption: "Receipt" }] }) });
+      assert.equal(untagged.statusCode, 422, "a receipt isn't a photo of the fix");
+      const stray = await inject("POST", "/service-logs", {
+        cookie: shopCookie, body: entry({ damage_mark_ids: [], photos: [{ id: receipt, damage_mark_id: lens }] }),
+      });
+      assert.equal(stray.statusCode, 400, "tagged to damage the entry doesn't fix");
+
+      const { id: after } = await uploadPhoto(shopCookie);
+      const res = await inject("POST", "/service-logs", {
+        cookie: shopCookie,
+        body: entry({ photos: [{ id: receipt, caption: "Receipt" }, { id: after, caption: "New lens", damage_mark_id: lens }] }),
+      });
+      assert.equal(res.statusCode, 201, res.body);
+      const entryId = res.json().id;
+      assert.ok(!(await onFile()).includes(lens));
+      const m = await markOf(lens);
+      assert.equal(m.repair.service_log_id, entryId);
+      assert.deepEqual(m.repair.photos.map((p: { id: string }) => p.id), [after], "only the tagged photo is a photo of the fix");
+      const e = (await inject("GET", `/service-logs/${entryId}`, { cookie: supCookie })).json();
+      assert.equal(e.damage_fixes.length, 1);
+      assert.equal(e.damage_fixes[0].active, true);
+      assert.deepEqual(e.damage_fixes[0].photos.map((p: { id: string }) => p.id), [after]);
+      assert.equal(e.photos.length, 2, "both photos are on the entry");
+      assert.equal((await inject("POST", `/damage-repairs/${m.repair.id}/undo`, { cookie: supCookie, body: { reason: "x" } })).statusCode, 409,
+        "a Log fix is undone by voiding the entry");
+
+      const v = await inject("POST", `/service-logs/${entryId}/void`, { cookie: shopCookie, body: { reason: "Wrong truck" } });
+      assert.equal(v.statusCode, 200, v.body);
+      assert.ok((await onFile()).includes(lens), "back on file");
+      assert.equal(v.json().damage_fixes[0].active, false);
+    });
+
+    test("the database keeps repairs and their photos: no edits except ending, no deletes", async () => {
+      const r = await one(`SELECT id FROM damage_repairs ORDER BY id LIMIT 1`);
+      await assert.rejects(q(`UPDATE damage_repairs SET note = 'x' WHERE id = $1`, [r.id]), /read-only/);
+      await assert.rejects(q(`DELETE FROM damage_repairs WHERE id = $1`, [r.id]), /can't be deleted/);
+      const p = await one(`SELECT id FROM photos WHERE damage_repair_id IS NOT NULL AND service_log_id IS NULL LIMIT 1`);
+      await assert.rejects(q(`DELETE FROM photos WHERE id = $1`, [p.id]), /can't be deleted once attached/);
+      await assert.rejects(q(`UPDATE photos SET caption = 'x' WHERE id = $1`, [p.id]), /read-only once attached/);
+    });
+
+    test("damage on an archived inspection can't be marked repaired", async () => {
+      const insp = await one(`SELECT inspection_id FROM damage_marks WHERE id = $1`, [marks["Dented door"]]);
+      assert.equal((await inject("POST", `/inspections/${insp.inspection_id}/archive`, { cookie: adminCookie, body: {} })).statusCode, 200);
+      const { id: photoId } = await uploadPhoto(supCookie);
+      const res = await inject("POST", `/damage-marks/${marks["Dented door"]}/repair`, {
+        cookie: supCookie, body: { client_id: randomUUID(), note: "x", photo_ids: [photoId] },
+      });
+      assert.equal(res.statusCode, 404);
+      await inject("POST", `/inspections/${insp.inspection_id}/unarchive`, { cookie: adminCookie, body: {} });
+    });
+  });
 }

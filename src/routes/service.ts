@@ -90,7 +90,9 @@ function idList(v: unknown, field: string, max: number): number[] {
   return [...new Set(v.map((x) => int(x, field, 1)))];
 }
 
-function photoList(v: unknown): { id: string; caption: string | null }[] {
+type EntryPhoto = { id: string; caption: string | null; damage_mark_id: number | null };
+
+function photoList(v: unknown): EntryPhoto[] {
   if (v == null) return [];
   if (!Array.isArray(v) || v.length > 40) throw bad("Too many photos.");
   const seen = new Set<string>();
@@ -99,7 +101,9 @@ function photoList(v: unknown): { id: string; caption: string | null }[] {
     const id = String(o.id ?? "").toLowerCase();
     if (!UUID_RE.test(id) || seen.has(id)) throw bad("Each photo needs a unique id.");
     seen.add(id);
-    return { id, caption: str(o.caption, "Photo caption", 300) };
+    // damage_mark_id: this photo shows that damage mark fixed (required for each damage the entry fixes).
+    const mark = o.damage_mark_id == null || o.damage_mark_id === "" ? null : int(o.damage_mark_id, "damage_mark_id", 1);
+    return { id, caption: str(o.caption, "Photo caption", 300), damage_mark_id: mark };
   });
 }
 
@@ -107,9 +111,12 @@ function photoList(v: unknown): { id: string; caption: string | null }[] {
 async function checkPhotos(photos: { id: string }[], userId: number, entryId: number | null) {
   if (!photos.length) return;
   const ids = photos.map((p) => p.id);
-  const found = await q(`SELECT id, inspection_id, service_log_id, uploaded_by FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
+  const found = await q(
+    `SELECT id, inspection_id, service_log_id, damage_repair_id, uploaded_by FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
   const ok = new Set(found
-    .filter((f) => f.inspection_id == null && (f.service_log_id == null ? f.uploaded_by === userId : f.service_log_id === entryId))
+    .filter((f) => f.inspection_id == null && (f.service_log_id == null
+      ? f.damage_repair_id == null && f.uploaded_by === userId
+      : f.service_log_id === entryId))
     .map((f) => f.id));
   const notReady = ids.filter((id) => !ok.has(id));
   if (notReady.length) {
@@ -117,12 +124,13 @@ async function checkPhotos(photos: { id: string }[], userId: number, entryId: nu
   }
 }
 
-async function attachPhotos(c: PoolClient, entryId: number, photos: { id: string; caption: string | null }[], userId: number) {
+/** Attach new photos to the entry; a photo of a fixed damage mark also points at that damage repair. */
+async function attachPhotos(c: PoolClient, entryId: number, photos: EntryPhoto[], userId: number, repairOf = new Map<number, number>()) {
   for (const p of photos) {
     const r = await c.query(
-      `UPDATE photos SET service_log_id = $2, caption = $3
-        WHERE id = $1 AND uploaded_by = $4 AND inspection_id IS NULL AND service_log_id IS NULL`,
-      [p.id, entryId, p.caption, userId],
+      `UPDATE photos SET service_log_id = $2, caption = $3, damage_repair_id = $5
+        WHERE id = $1 AND uploaded_by = $4 AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL`,
+      [p.id, entryId, p.caption, userId, p.damage_mark_id ? repairOf.get(p.damage_mark_id) ?? null : null],
     );
     if (r.rowCount === 1) continue;
     const mine = await c.query(`SELECT 1 FROM photos WHERE id = $1 AND service_log_id = $2`, [p.id, entryId]);
@@ -168,6 +176,55 @@ async function attachRepairs(c: PoolClient, entryId: number, vehicleId: number, 
   }
 }
 
+/**
+ * Mark damage on file as repaired by this entry (SPEC §9). Each damage mark it newly fixes needs at least one photo
+ * of the fixed area in this save. Marks already repaired by this entry are kept; a mark someone else already marked
+ * repaired is left alone (like repairs), so a retried or offline save never fails on it.
+ * Returns damage mark id -> this entry's repair id, for tagging the photos.
+ */
+async function attachDamage(c: PoolClient, entryId: number, vehicleId: number, markIds: number[], photos: EntryPhoto[],
+  userId: number, work: string): Promise<Map<number, number>> {
+  const mine = new Map<number, number>((await c.query(
+    "SELECT damage_mark_id, id FROM damage_repairs WHERE service_log_id = $1 AND active", [entryId],
+  )).rows.map((r) => [r.damage_mark_id, r.id]));
+  const tagged = [...new Set(photos.map((p) => p.damage_mark_id).filter((x): x is number => x != null))];
+  if (tagged.some((m) => !markIds.includes(m) && !mine.has(m))) throw bad("A photo is tagged to damage this entry doesn't fix.");
+  const todo = markIds.filter((m) => !mine.has(m));
+  if (!todo.length) return mine;
+
+  const rows = (await c.query(
+    `SELECT dm.id, i.vehicle_id,
+            EXISTS (SELECT 1 FROM inspection_states s WHERE s.inspection_id = i.id AND s.state <> 'active') AS hidden,
+            EXISTS (SELECT 1 FROM damage_repairs r WHERE r.damage_mark_id = dm.id AND r.active) AS repaired
+       FROM damage_marks dm JOIN inspections i ON i.id = dm.inspection_id
+      WHERE dm.id = ANY($1::int[])
+      FOR UPDATE OF dm`,
+    [todo],
+  )).rows;
+  const wrong = todo.filter((m) => {
+    const r = rows.find((x) => x.id === m);
+    return !r || r.vehicle_id !== vehicleId || r.hidden;
+  });
+  if (wrong.length) {
+    throw new HttpError(422, "Some of the damage picked isn't on file for this truck. Reload and pick again.", { code: "bad_damage", marks: wrong });
+  }
+  const fresh = rows.filter((r) => !r.repaired).map((r) => r.id as number);
+  const noPhoto = fresh.filter((m) => !photos.some((p) => p.damage_mark_id === m));
+  if (noPhoto.length) {
+    throw new HttpError(422, "Add a photo of the fixed area for each damage this entry fixes.", { code: "damage_photo_missing", marks: noPhoto });
+  }
+  const note = `Fixed (maintenance log): ${work}`.slice(0, 1000);
+  for (const m of fresh) {
+    const r = await c.query(
+      `INSERT INTO damage_repairs (damage_mark_id, service_log_id, note, repaired_by) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (damage_mark_id) WHERE active DO NOTHING RETURNING id`,
+      [m, entryId, note, userId],
+    );
+    if (r.rows[0]) mine.set(m, r.rows[0].id);
+  }
+  return mine;
+}
+
 const same = (a: unknown, b: unknown) => String(a ?? "") === String(b ?? "");
 
 /** One entry with its repairs, photos and edit history. */
@@ -194,7 +251,17 @@ export async function loadEntry(id: number) {
       ORDER BY i.inspection_date, ii.id`,
     [id],
   );
-  const photos = await q(`SELECT id, caption FROM photos WHERE service_log_id = $1 ORDER BY created_at, id`, [id]);
+  const photos = await q(`SELECT id, caption, damage_repair_id FROM photos WHERE service_log_id = $1 ORDER BY created_at, id`, [id]);
+  const damageFixes = (await q(
+    `SELECT dr.id, dr.damage_mark_id, dr.active, dr.repaired_at, dr.end_reason, dm.note, dm.diagram,
+            i.id AS inspection_id, i.inspection_date
+       FROM damage_repairs dr
+       JOIN damage_marks dm ON dm.id = dr.damage_mark_id
+       JOIN inspections i ON i.id = dm.inspection_id
+      WHERE dr.service_log_id = $1
+      ORDER BY i.inspection_date, dm.seq`,
+    [id],
+  )).map((r) => ({ ...r, photos: photos.filter((p) => p.damage_repair_id === r.id).map(({ damage_repair_id: _d, ...p }) => p) }));
   const hist = await q(
     `SELECT h.changed_at, h.old_row, u.name AS changed_by_name
        FROM service_log_history h LEFT JOIN users u ON u.id = h.changed_by
@@ -226,7 +293,8 @@ export async function loadEntry(id: number) {
     updated_by_name: e.updated_by_name,
     voided: e.voided_at ? { at: e.voided_at, by: e.voided_by_name, reason: e.void_reason } : null,
     repairs,
-    photos,
+    damage_fixes: damageFixes,
+    photos: photos.map(({ damage_repair_id: _d, ...p }) => p),
     history,
   };
 }
@@ -376,6 +444,7 @@ export default async function serviceRoutes(app: FastifyInstance) {
     if (!(await one(`SELECT 1 FROM vehicles WHERE id = $1`, [vehicleId]))) throw bad("That truck doesn't exist.");
     const f = parseFields(b, true);
     const repairs = idList(b.repair_item_ids, "repair_item_ids", 100);
+    const damage = idList(b.damage_mark_ids, "damage_mark_ids", 50);
     const photos = photoList(b.photos);
     await checkPhotos(photos, user.id, null);
 
@@ -391,7 +460,8 @@ export default async function serviceRoutes(app: FastifyInstance) {
         if (!ins.rows[0]) throw new DuplicateSave();
         const newId: number = ins.rows[0].id;
         await attachRepairs(c, newId, vehicleId, repairs, user.id, String(f.description));
-        await attachPhotos(c, newId, photos, user.id);
+        const repairOf = await attachDamage(c, newId, vehicleId, damage, photos, user.id, String(f.description));
+        await attachPhotos(c, newId, photos, user.id, repairOf);
         return newId;
       });
       return reply.code(201).send({ id, duplicate: false });
@@ -412,6 +482,7 @@ export default async function serviceRoutes(app: FastifyInstance) {
     const version = int(b.version, "version", 1);
     const f = parseFields(b, false);
     const repairs = idList(b.repair_item_ids, "repair_item_ids", 100);
+    const damage = idList(b.damage_mark_ids, "damage_mark_ids", 50);
     const photos = photoList(b.photos);
     await checkPhotos(photos, user.id, id);
 
@@ -424,20 +495,22 @@ export default async function serviceRoutes(app: FastifyInstance) {
           { code: "stale" });
       }
       const changed = (Object.keys(f) as Field[]).filter((k) => !same(cur[k], f[k]));
-      if (changed.length || repairs.length || photos.length) {
+      if (changed.length || repairs.length || damage.length || photos.length) {
         // Even an edit that only adds photos or repairs bumps the version and records who did it.
         await c.query(
           `UPDATE service_logs SET ${[...changed.map((k, i) => `${k} = $${i + 3}`), "updated_by = $2"].join(", ")} WHERE id = $1`,
           [id, user.id, ...changed.map((k) => f[k])],
         );
       }
-      await attachRepairs(c, id, cur.vehicle_id, repairs, user.id, String(f.description ?? cur.description));
-      await attachPhotos(c, id, photos, user.id);
+      const work = String(f.description ?? cur.description);
+      await attachRepairs(c, id, cur.vehicle_id, repairs, user.id, work);
+      const repairOf = await attachDamage(c, id, cur.vehicle_id, damage, photos, user.id, work);
+      await attachPhotos(c, id, photos, user.id, repairOf);
     });
     return loadEntry(id);
   });
 
-  // Void (never delete). Repairs this entry closed are reopened so they can be fixed by another entry.
+  // Void (never delete). Repairs this entry closed are reopened, and damage it fixed goes back on file.
   app.post("/service-logs/:id/void", canWrite, async (req) => {
     const user = req.user!;
     const id = idParam(req.params);
@@ -460,6 +533,12 @@ export default async function serviceRoutes(app: FastifyInstance) {
         [id],
       );
       await c.query(`UPDATE service_log_repairs SET active = false WHERE service_log_id = $1`, [id]);
+      // Damage it marked repaired goes back on file.
+      await c.query(
+        `UPDATE damage_repairs SET active = false, ended_at = now(), ended_by = $2, end_reason = $3
+          WHERE service_log_id = $1 AND active`,
+        [id, user.id, `Maintenance entry voided: ${reason}`.slice(0, 600)],
+      );
     });
     return loadEntry(id);
   });

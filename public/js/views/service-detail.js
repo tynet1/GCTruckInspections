@@ -63,6 +63,16 @@ export async function render(app, id) {
         <a class="small" href="#/inspection/${esc(r.inspection_id)}">From ${fmtDate(r.inspection_date)} inspection</a></li>`).join("")}</ul></div>`;
   }
 
+  const fixes = e.damage_fixes || [];
+  if (fixes.length) {
+    h += `<h2>Damage fixed (${fixes.filter((f) => f.active).length})</h2><div class="card"><ul class="repairlist">${fixes.map((f) => `<li>
+        <b>${esc(f.note || "(no description)")}</b>${f.diagram === "trailer" ? ` <span class="small muted">(trailer)</span>` : ""}
+        ${f.active ? "" : `<span class="pill grey">Back on file</span>`}
+        ${f.photos.length ? `<div class="row" style="margin-top:4px">${f.photos.map((p) =>
+          `<img class="dmgthumb" src="/api/photos/${esc(p.id)}" data-photo="${esc(p.id)}" data-cap="${esc(["Fixed: " + (f.note || "damage"), p.caption].filter(Boolean).join(" — "))}" alt="Photo of the fix">`).join("")}</div>` : ""}
+        <a class="small" href="#/inspection/${esc(f.inspection_id)}">Marked on the ${fmtDate(f.inspection_date)} inspection</a></li>`).join("")}</ul></div>`;
+  }
+
   if (e.photos.length) {
     h += `<h2>Photos (${e.photos.length})</h2><div class="card"><div class="photos">${e.photos.map((p) => `<button type="button" class="ph" data-photo="${esc(p.id)}" data-cap="${esc(p.caption || "")}" style="border:0;padding:0">
         <img alt="${esc(p.caption || "Photo")}" src="/api/photos/${esc(p.id)}">${p.caption ? `<span class="tag">${esc(p.caption)}</span>` : ""}</button>`).join("")}</div></div>`;

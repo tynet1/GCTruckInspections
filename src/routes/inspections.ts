@@ -166,11 +166,13 @@ export async function submitInspection(input: SubmitInput, userId: number) {
     if (p.checklist_item_id != null && !answered.has(p.checklist_item_id)) throw bad("Photo points at a checklist item that isn't in this inspection.");
   }
 
-  // Photos must already be uploaded (by this user) and not attached to another inspection.
+  // Photos must already be uploaded (by this user) and not attached to anything yet.
   if (input.photos.length) {
     const ids = input.photos.map((p) => p.id);
-    const found = await q(`SELECT id, inspection_id, uploaded_by FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
-    const ok = new Set(found.filter((f) => f.inspection_id == null && f.uploaded_by === userId).map((f) => f.id));
+    const found = await q(
+      `SELECT id, inspection_id, service_log_id, damage_repair_id, uploaded_by FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
+    const ok = new Set(found.filter((f) => f.inspection_id == null && f.service_log_id == null && f.damage_repair_id == null
+      && f.uploaded_by === userId).map((f) => f.id));
     const notReady = ids.filter((id) => !ok.has(id));
     if (notReady.length) {
       throw new HttpError(422, "Some photos haven't finished uploading yet.", { code: "photos_missing", photos: notReady });
@@ -249,7 +251,7 @@ async function insertChildren(c: PoolClient, id: string, input: SubmitInput, che
   for (const p of input.photos) {
     const r = await c.query(
       `UPDATE photos SET inspection_id = $2, caption = $3, damage_mark_id = $4, inspection_item_id = $5
-        WHERE id = $1 AND inspection_id IS NULL`,
+        WHERE id = $1 AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL`,
       [p.id, id, p.caption, p.damage_key ? markIds.get(p.damage_key) ?? null : null,
         p.checklist_item_id ? itemIds.get(p.checklist_item_id) ?? null : null],
     );

@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { requireUser } from "../auth.ts";
-import { one, q } from "../db.ts";
+import { requireRole, requireUser } from "../auth.ts";
+import { one, q, tx } from "../db.ts";
 import { defaultDiagram, diagramUrl, readDiagram } from "../diagrams.ts";
-import { idParam, notFound } from "../http.ts";
+import { bad, conflict, HttpError, idParam, notFound, obj, reqStr, UUID_RE } from "../http.ts";
 
 const VEHICLE_COLS = `
   vs.id, vs.truck_code, vs.unit, vs.vin, vs.plate, vs.year, vs.make, vs.model,
@@ -52,6 +52,16 @@ export interface DamageMark {
   trailer_number: string | null;
   on_current_diagram: boolean; // false if the truck's picture (or trailer type) changed since, so it can't be drawn
   photos: { id: string; caption: string | null }[];
+  repair: DamageRepair | null; // set while it's marked repaired (it's then off the form's grey dots)
+}
+
+export interface DamageRepair {
+  id: number;
+  repaired_at: string;
+  repaired_by_name: string;
+  note: string | null;
+  service_log_id: number | null; // fixed through this maintenance entry; null = marked repaired by a supervisor
+  photos: { id: string; caption: string | null }[]; // the fixed area
 }
 
 /**
@@ -74,16 +84,105 @@ export async function damageHistory(vehicleId: number, current: { diagram_id: nu
       WHERE i.vehicle_id = $1 ORDER BY p.created_at, p.id`,
     [vehicleId],
   );
+  const repairs = await q(
+    `SELECT dr.id, dr.damage_mark_id, dr.repaired_at, dr.note, dr.service_log_id, u.name AS repaired_by_name
+       FROM damage_repairs dr
+       JOIN users u ON u.id = dr.repaired_by
+       JOIN damage_marks dm ON dm.id = dr.damage_mark_id
+       JOIN live_inspections i ON i.id = dm.inspection_id
+      WHERE i.vehicle_id = $1 AND dr.active`,
+    [vehicleId],
+  );
+  const repairPhotos = repairs.length
+    ? await q(`SELECT id, caption, damage_repair_id FROM photos WHERE damage_repair_id = ANY($1::int[]) ORDER BY created_at, id`,
+      [repairs.map((r) => r.id)])
+    : [];
   const count = { truck: 0, trailer: 0 };
   return marks.map(({ drawn_on, ...m }): DamageMark => {
     const now = m.diagram === "truck" ? current.diagram_id : current.trailer_diagram_id;
+    const r = repairs.find((x) => x.damage_mark_id === m.id);
     return {
       ...m,
       n: ++count[m.diagram as "truck" | "trailer"],
       on_current_diagram: !drawn_on || drawn_on === now,
       photos: photos.filter((p) => p.damage_mark_id === m.id).map(({ damage_mark_id: _d, ...p }) => p),
+      repair: r
+        ? {
+          id: r.id, repaired_at: r.repaired_at, repaired_by_name: r.repaired_by_name, note: r.note, service_log_id: r.service_log_id,
+          photos: repairPhotos.filter((p) => p.damage_repair_id === r.id).map(({ damage_repair_id: _d, ...p }) => p),
+        }
+        : null,
     };
   });
+}
+
+/**
+ * A supervisor marks damage on file repaired: a note and at least one photo of the fixed area are required.
+ * Idempotent on client_id. The shop does the same through the maintenance log (Log fix) instead.
+ */
+async function markRepaired(markId: number, userId: number, body: unknown) {
+  const b = obj(body);
+  const clientId = String(b.client_id ?? "").toLowerCase();
+  if (!UUID_RE.test(clientId)) throw bad("client_id must be a uuid.");
+  const note = reqStr(b.note, "What was done", 1000);
+  if (!Array.isArray(b.photo_ids) || !b.photo_ids.length) throw bad("Add a photo of the fixed area.");
+  if (b.photo_ids.length > 10) throw bad("Too many photos.");
+  const photoIds = [...new Set(b.photo_ids.map((x) => String(x).toLowerCase()))];
+  if (photoIds.some((id) => !UUID_RE.test(id))) throw bad("Each photo needs an id.");
+
+  const dup = await one(`SELECT id FROM damage_repairs WHERE client_id = $1`, [clientId]);
+  if (dup) return { id: dup.id, duplicate: true };
+  const ready = await q(
+    `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
+        AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL`,
+    [photoIds, userId],
+  );
+  const missing = photoIds.filter((id) => !ready.some((r) => r.id === id));
+  if (missing.length) throw new HttpError(422, "The photo hasn't finished uploading yet.", { code: "photos_missing", photos: missing });
+
+  return tx(async (c) => {
+    const m = (await c.query(
+      `SELECT dm.id, EXISTS (SELECT 1 FROM inspection_states s WHERE s.inspection_id = dm.inspection_id AND s.state <> 'active') AS hidden
+         FROM damage_marks dm WHERE dm.id = $1 FOR UPDATE`,
+      [markId],
+    )).rows[0];
+    if (!m || m.hidden) throw notFound("That damage isn't on file.");
+    const ins = await c.query(
+      `INSERT INTO damage_repairs (client_id, damage_mark_id, note, repaired_by) VALUES ($1, $2, $3, $4)
+       ON CONFLICT DO NOTHING RETURNING id`,
+      [clientId, markId, note, userId],
+    );
+    if (!ins.rows[0]) {
+      const again = (await c.query(`SELECT id FROM damage_repairs WHERE client_id = $1`, [clientId])).rows[0];
+      if (again) return { id: again.id, duplicate: true };
+      throw conflict("That damage is already marked repaired.");
+    }
+    const id: number = ins.rows[0].id;
+    for (const p of photoIds) {
+      const r = await c.query(
+        `UPDATE photos SET damage_repair_id = $2 WHERE id = $1 AND uploaded_by = $3
+            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL`,
+        [p, id, userId],
+      );
+      if (r.rowCount !== 1) throw conflict("A photo couldn't be attached. Add it again.");
+    }
+    return { id, duplicate: false };
+  });
+}
+
+/** Undo a supervisor's "mark repaired" (a mistake). Nothing is erased: the repair is ended with a reason. */
+async function undoRepair(repairId: number, userId: number, body: unknown) {
+  const reason = reqStr(obj(body ?? {}).reason, "Reason", 500);
+  const r = await one(`SELECT service_log_id, active FROM damage_repairs WHERE id = $1`, [repairId]);
+  if (!r) throw notFound("Repair not found.");
+  if (r.service_log_id) throw conflict("This was fixed through a maintenance entry. Void that entry to put the damage back on file.");
+  const u = await one(
+    `UPDATE damage_repairs SET active = false, ended_at = now(), ended_by = $2, end_reason = $3
+      WHERE id = $1 AND active RETURNING id`,
+    [repairId, userId, `Undone: ${reason}`],
+  );
+  if (!u) throw conflict("That repair was already undone.");
+  return { ok: true };
 }
 
 export default async function vehicleRoutes(app: FastifyInstance) {
@@ -92,6 +191,14 @@ export default async function vehicleRoutes(app: FastifyInstance) {
   });
 
   app.get("/vehicles", async () => vehicleRows());
+
+  // Damage on file: mark repaired (supervisor+, photo required) and undo that.
+  app.post("/damage-marks/:id/repair", { preHandler: requireRole("supervisor") }, async (req, reply) => {
+    const out = await markRepaired(idParam(req.params), req.user!.id, req.body);
+    return reply.code(out.duplicate ? 200 : 201).send(out);
+  });
+  app.post("/damage-repairs/:id/undo", { preHandler: requireRole("supervisor") }, async (req) =>
+    undoRepair(idParam(req.params), req.user!.id, req.body));
 
   app.get("/vehicles/:id", async (req) => {
     const id = idParam(req.params);
@@ -137,10 +244,11 @@ export default async function vehicleRoutes(app: FastifyInstance) {
     if (!last) return { inspection: null, damage: [] };
     const [now] = await vehicleRows("WHERE vs.id = $1", [id]);
     if (!now) throw notFound("Truck not found.");
-    // Old pins only make sense on the same picture: skip any drawn on a diagram the truck no longer uses.
+    // Old pins only make sense on the same picture: skip any drawn on a diagram the truck no longer uses,
+    // and any marked repaired.
     const damage = (await damageHistory(id, now))
-      .filter((m) => m.on_current_diagram)
-      .map(({ photos: _p, on_current_diagram: _c, ...m }) => m);
+      .filter((m) => m.on_current_diagram && !m.repair)
+      .map(({ photos: _p, on_current_diagram: _c, repair: _r, ...m }) => m);
     return { inspection: last, damage };
   });
 

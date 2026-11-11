@@ -30,7 +30,7 @@ on the phone and upload when signal returns.
 | Fleet management (lease details, statuses, lease-return prep, trailers as assets) | waiting on scope answers (SPEC §9) |
 | Batch PDF export: tick inspections, get one PDF each (zip, or share as separate files) | done |
 | Maintenance log: several types of work on one entry (multi-select, next-due per type) | designed (SPEC §9), not built |
-| Mark damage repaired (photo of the fix required; drops off the form's grey dots, kept on the truck page) | designed (SPEC §9), not built |
+| Mark damage repaired (photo of the fix required; Log fix or supervisor; drops off the form's grey dots, kept on the truck page) | done |
 | Archive or delete inspections (delete = recoverable forever, admin only, reason required); database refuses to erase inspections | done |
 | CSV export, repairs board, checklist editor | not started |
 

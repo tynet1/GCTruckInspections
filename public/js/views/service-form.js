@@ -10,25 +10,25 @@ import { $, $$, confirmBox, debounce, esc, fmtDate, fmtNum, shrinkImage, toast, 
 import { SECTION_TITLES } from "./common.js";
 
 let d = null;    // the draft being edited
-let ctx = null;  // { app, vehicle, categories, openRepairs, entry, currentMiles }
+let ctx = null;  // { app, vehicle, categories, openRepairs, damage, entry, currentMiles }
 let saving = false;
 const blobUrls = new Map();
 const persist = debounce(() => { if (d && d.touched) saveSvcDraft(d); }, 400);
 
 /**
  * mode "new": id is the truck id. mode "edit": id is the entry id.
- * fix: a repair item id from a "Log fix" button; it starts ticked.
+ * From a "Log fix" button: fixKind "fix" + a repair item id, or "fixdmg" + a damage mark id; it starts ticked.
  */
-export async function render(app, mode, id, fix) {
+export async function render(app, mode, id, fixKind, fixId) {
   const nav = state.nav;
   const isEdit = mode === "edit";
   setHeader({ title: isEdit ? "Edit maintenance" : "Log maintenance", back: isEdit ? `#/service/${id}` : "#/" });
   app.innerHTML = `<div class="empty">Loading…</div>`;
-  let entry = null, vehicle, openRepairs, config, history;
+  let entry = null, vehicle, openRepairs, damage, config, history;
   try {
     if (isEdit) entry = await api(`/service-logs/${id}`);
     const vid = isEdit ? entry.vehicle.id : Number(id);
-    [{ vehicle, openRepairs }, config, history] = await Promise.all([
+    [{ vehicle, openRepairs, damage }, config, history] = await Promise.all([
       api(`/vehicles/${vid}`), api("/service-config"), api(`/vehicles/${vid}/service`).catch(() => null),
     ]);
   } catch (e) {
@@ -44,10 +44,14 @@ export async function render(app, mode, id, fix) {
   let draft = await getSvcDraft(key);
   if (draft?.status === "queued") return void location.replace(`#/truck/${vehicle.id}`);
   if (!draft) draft = isEdit ? draftFromEntry(key, entry) : newDraft(key, vehicle);
+  if (!draft.damage) draft.damage = []; // drafts saved before damage fixes existed
   d = draft;
   setActiveSvc(d);
-  ctx = { app, vehicle, categories: config.categories, openRepairs, entry, currentMiles: history?.current_mileage ?? vehicle.last_mileage ?? null };
-  if (fix && !isEdit) startFix(Number(fix));
+  ctx = {
+    app, vehicle, categories: config.categories, openRepairs, damage: damage || [], entry,
+    currentMiles: history?.current_mileage ?? vehicle.last_mileage ?? null,
+  };
+  if (fixId && !isEdit) (fixKind === "fixdmg" ? startFixDamage : startFix)(Number(fixId));
   setHeader({
     title: isEdit ? "Edit maintenance" : d.touched ? "Maintenance draft" : "Log maintenance",
     sub: `${vehicle.truck_code} · ${vehicleInfo(vehicle)}`,
@@ -73,7 +77,7 @@ function newDraft(key, v) {
     key, vehicleId: v.id, truckCode: v.truck_code, clientId: uuid(), status: "editing", touched: false,
     date: today(), mileage: "", category: "", description: "", parts: "", cost: "",
     performedBy: state.user?.name || "", vendor: "", notes: "", nextMiles: "", nextDate: "",
-    repairs: [], photos: [], lastError: null,
+    repairs: [], damage: [], photos: [], lastError: null,
   };
 }
 
@@ -84,7 +88,7 @@ function draftFromEntry(key, e) {
     date: e.service_date, mileage: e.mileage ?? "", category: e.category, description: e.description || "",
     parts: e.parts || "", cost: e.cost == null ? "" : Number(e.cost).toFixed(2), performedBy: e.performed_by || "",
     vendor: e.vendor || "", notes: e.notes || "", nextMiles: e.next_due_mileage ?? "", nextDate: e.next_due_date || "",
-    repairs: [], photos: [], lastError: null,
+    repairs: [], damage: [], photos: [], lastError: null,
   };
 }
 
@@ -151,6 +155,47 @@ function startFix(itemId) {
   saveSvcDraft(d);
 }
 
+// ---------- Damage this fixed (SPEC §9: a photo of the fixed area is required for each) ----------
+
+const linkedDamage = () => (ctx.entry?.damage_fixes || []).filter((f) => f.active);
+/** Damage on file for this truck that this entry can still mark repaired. */
+const openDamage = () => ctx.damage.filter((m) => !m.repair && !linkedDamage().some((l) => l.damage_mark_id === m.id));
+const pickedDamage = () => { const open = openDamage().map((m) => m.id); return d.damage.filter((id) => open.includes(id)); };
+
+function damageHtml() {
+  const linked = linkedDamage();
+  const open = openDamage();
+  let h = linked.map((f) => `<div class="pick done"><span class="tick">✓</span><span><b>${esc(f.note || "(no description)")}</b><br>
+      <span class="small muted">Fixed by this entry · marked ${fmtDate(f.inspection_date)}</span></span></div>`).join("");
+  if (!open.length) return h || `<span class="muted">No damage on file for ${esc(ctx.vehicle.truck_code)}.</span>`;
+  h += open.map((m) => {
+    const on = d.damage.includes(m.id);
+    const pics = d.photos.filter((p) => p.damageMarkId === m.id);
+    return `<div class="dmgfix" id="dmg-${m.id}"><label class="pick"><input type="checkbox" data-dmg="${m.id}"${on ? " checked" : ""}>
+        <span><b>${m.diagram === "trailer" ? "Trailer: " : ""}${esc(m.note || "(no description)")}</b><br>
+        <span class="small muted">Marked ${fmtDate(m.inspection_date)}</span></span></label>
+      ${on ? `<div class="fixphotos"><div class="photos">${pics.map(photoTile).join("")}
+          <label class="addph"><span style="font-size:24px">📷</span><span>Photo of the fixed area</span><input type="file" accept="image/*" data-dmgcam="${m.id}"></label></div>
+        ${pics.length ? "" : `<p class="small" style="color:var(--bad);margin:6px 0 0">A photo of the fixed area is required.</p>`}</div>` : ""}</div>`;
+  }).join("");
+  h += `<p class="small muted" style="margin:8px 0 0">Ticked damage comes off the truck's damage on file when you save. Each needs a photo of the fixed area.</p>`;
+  return h;
+}
+
+const redrawDamage = () => {
+  const el = $("#s-damage");
+  if (el) { el.innerHTML = damageHtml(); loadThumbs(); }
+};
+
+/** Came from a damage mark's "Log fix" button: tick it, and pick "Repair" if no type of work is chosen yet. */
+function startFixDamage(markId) {
+  if (!openDamage().some((m) => m.id === markId)) return;
+  if (!d.damage.includes(markId)) d.damage.push(markId);
+  if (!d.category) d.category = "repair";
+  d.touched = true;
+  saveSvcDraft(d);
+}
+
 function draw() {
   const changedOnServer = d.entryId && ctx.entry && d.version !== ctx.entry.version;
   let h = "";
@@ -179,6 +224,7 @@ function draw() {
   </div>`;
 
   h += `<h2>Repairs this fixed</h2><div class="card" id="s-repairs">${repairsHtml()}</div>`;
+  if (openDamage().length || linkedDamage().length) h += `<h2>Damage this fixed</h2><div class="card" id="s-damage">${damageHtml()}</div>`;
 
   h += `<h2>Next service due</h2><div class="card"><div class="fields">
       <div><label class="f" for="s-nmi">At mileage</label><input class="t" id="s-nmi" inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="${esc(d.nextMiles)}" placeholder="Optional"></div>
@@ -204,11 +250,16 @@ function draw() {
   wire();
 }
 
-function photosHtml() {
-  return d.photos.map((p) => `<div class="ph"><img alt="" data-pid="${p.id}"${blobUrls.has(p.id) ? ` src="${blobUrls.get(p.id)}"` : ""}>
+function photoTile(p) {
+  return `<div class="ph"><img alt="" data-pid="${p.id}"${blobUrls.has(p.id) ? ` src="${blobUrls.get(p.id)}"` : ""}>
       ${p.uploaded ? "" : `<div class="state">${navigator.onLine ? `<span class="spinner"></span>` : "Saved on phone"}</div>`}
       <button type="button" class="x" data-phx="${p.id}" aria-label="Remove photo">×</button>
-      <input class="cap" data-phc="${p.id}" placeholder="Caption" value="${esc(p.caption || "")}"></div>`).join("")
+      <input class="cap" data-phc="${p.id}" placeholder="Caption" value="${esc(p.caption || "")}"></div>`;
+}
+
+/** The general photos (receipts, parts, finished work); photos of fixed damage show under that damage instead. */
+function photosHtml() {
+  return d.photos.filter((p) => !p.damageMarkId).map(photoTile).join("")
     + `<label class="addph"><span style="font-size:28px">＋</span><span>Add photos</span><input type="file" accept="image/*" multiple id="s-phIn"></label>`;
 }
 
@@ -275,6 +326,25 @@ function wire() {
       redrawRepairs();
       return changed();
     }
+    if (t.dataset.dmg) {
+      const id = Number(t.dataset.dmg);
+      if (t.checked) d.damage = [...new Set([...d.damage, id])];
+      else {
+        d.damage = d.damage.filter((x) => x !== id);
+        // Keep any photos already taken; they just become general photos of this entry.
+        d.photos.forEach((p) => { if (p.damageMarkId === id) p.damageMarkId = null; });
+        redrawPhotos();
+      }
+      redrawDamage();
+      return changed();
+    }
+    if (t.dataset.dmgcam && t.files?.length) {
+      const files = [...t.files];
+      const markId = Number(t.dataset.dmgcam);
+      t.value = "";
+      addPhotos(files, markId);
+      return;
+    }
     if (t.id === "s-phIn" && t.files?.length) {
       const files = [...t.files];
       t.value = "";
@@ -296,6 +366,7 @@ function wire() {
       d.photos = d.photos.filter((p) => p.id !== id);
       deletePhotoBlob(id).catch(() => {});
       redrawPhotos();
+      redrawDamage();
       return changed();
     }
     if (t.id === "s-save") return save();
@@ -309,17 +380,19 @@ function wire() {
   };
 }
 
-async function addPhotos(files) {
+/** markId: these are photos of that damage mark fixed. */
+async function addPhotos(files, markId = null) {
   for (const f of files) {
     const id = uuid();
     const blob = await shrinkImage(f);
     if (!d) return;
     await storePhotoBlob(id, blob);
     blobUrls.set(id, URL.createObjectURL(blob));
-    d.photos.push({ id, caption: "", uploaded: false });
+    d.photos.push({ id, caption: "", uploaded: false, damageMarkId: markId });
     d.touched = true;
     await saveSvcDraft(d);
-    redrawPhotos();
+    if (markId) redrawDamage(); else redrawPhotos();
+    updateMissing();
   }
   toast(files.length > 1 ? `${files.length} photos added` : "Photo added");
   uploadPhotos();
@@ -336,7 +409,7 @@ async function uploadPhotos() {
   } finally {
     uploadingNow = false;
   }
-  if (d) redrawPhotos();
+  if (d) { redrawPhotos(); redrawDamage(); }
 }
 
 // ---------- Validation and save ----------
@@ -348,6 +421,12 @@ function missingList() {
   if (!d.category) miss.push({ label: "type of work", sel: "#s-cat" });
   if (!d.description.trim()) miss.push({ label: "work done", sel: "#s-work" });
   if (d.cost.trim() && !/^\$?\s*[\d,]{1,9}(\.\d{1,2})?$/.test(d.cost.trim())) miss.push({ label: "cost as an amount like 125.50", sel: "#s-cost" });
+  for (const id of pickedDamage()) {
+    if (!d.photos.some((p) => p.damageMarkId === id)) {
+      const m = ctx.damage.find((x) => x.id === id);
+      miss.push({ label: `photo of the fixed ${m?.note ? `"${m.note}"` : "damage"}`, sel: `#dmg-${id}` });
+    }
+  }
   return miss;
 }
 
@@ -379,7 +458,11 @@ function buildPayload() {
     next_due_mileage: d.nextMiles === "" ? null : Number(d.nextMiles),
     next_due_date: d.nextDate || null,
     repair_item_ids: d.repairs,
-    photos: d.photos.map((p) => ({ id: p.id, caption: p.caption || null })),
+    damage_mark_ids: pickedDamage(),
+    photos: d.photos.map((p) => ({
+      id: p.id, caption: p.caption || null,
+      damage_mark_id: p.damageMarkId && pickedDamage().includes(p.damageMarkId) ? p.damageMarkId : null,
+    })),
   };
   return d.entryId ? { version: d.version, ...fields } : { client_id: d.clientId, vehicle_id: d.vehicleId, ...fields };
 }

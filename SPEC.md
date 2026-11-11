@@ -55,7 +55,8 @@ Tunnel, which needs a domain on Tyler's Cloudflare account.
 2. **Home / pick a truck:** searchable list of trucks (code, year/make/model, plate, VIN). Each shows badges for last inspection date (warn if over 35 days), open repair count, draft in progress, and registration expired.
 3. **Truck page:** header info, Start/Resume inspection, open repairs from all past inspections, **damage on file** (the
    truck picture with every damage mark from every inspection, numbered oldest first, and a list newest first with the date,
-   a link to the inspection and its photos), and inspection history.
+   a link to the inspection and its photos), and inspection history. Each mark on file has **Log fix** (shop/admin) and
+   **Mark repaired** (supervisor/admin); repaired marks move to a **Repaired** list with before and after photos (§9).
 4. **Inspection form** (same order as the paper sheet):
    - Truck header (read-only)
    - Date (default today), inspector name (default signed-in user), mileage (numeric keypad), oil change due Yes/No
@@ -99,6 +100,7 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - The phone keeps a draft until the server confirms it; submits are idempotent; uploads retry.
 - Files are written to a temp file, flushed to disk and renamed, so a crash never leaves a half-written photo.
 - Schema changes only add numbered migrations, each in one transaction.
+- Damage repairs (006) can't be edited or deleted, only ended (undo / voided entry) with who, when and why.
 - The database refuses to delete inspections, their checklist answers and damage marks, and any photo once it's attached
   (005). "Delete" in the app only marks an inspection deleted; it stays restorable for good, with every change kept as history.
 - Nightly backups (database + uploads) to a second location, and a restore is tested (done 2026-11-11 on Tyler's PC: restored
@@ -158,6 +160,9 @@ GET  /inspections?limit&status&vehicle_id&from&to&archived   (from/to: inclusive
 POST /inspections/:id/archive {reason?} · /unarchive          supervisor+
 POST /inspections/:id/delete {reason} · /restore             admin
 GET  /admin/deleted-inspections                               admin
+POST /damage-marks/:id/repair {client_id, note, photo_ids[]}   supervisor+ (photo required; idempotent)
+POST /damage-repairs/:id/undo {reason}                       supervisor+ (supervisor repairs only)
+POST/PATCH /service-logs also take damage_mark_ids[], with photos[].damage_mark_id for the photo of each fix
 GET  /inspections/:id
 POST /inspections/:id/review     {signature (png)}        supervisor+
 POST /inspection-items/:id/resolve {note}                 supervisor+
@@ -201,8 +206,8 @@ POST /service-logs/:id/void         {reason}                                    
        The old columns stay, so nothing already logged changes.
      - Everything that reads the type follows it: repair auto-ticking matches any selected type, lists and the inspection
        PDF show every type with its next-due, edit history shows type changes.
-   - **Mark damage repaired (requested 2026-11-11, designed, not built):** damage on file (§4 item 3) builds up forever today,
-     even after the body shop fixes it.
+   - **Mark damage repaired (built 2026-11-11, migration 006):** damage on file (§4 item 3) used to build up forever, even
+     after the body shop fixed it.
      - Each mark in "Damage on file" on the truck page gets **Repaired**: shop/admin can **Log fix** (opens a maintenance entry
        with that damage ticked, like repair items), and supervisors can mark it repaired with a short note.
      - **A photo of the fixed area is required (Tyler, 2026-11-11)**, either way it's marked: proof for lease returns. With
@@ -211,6 +216,8 @@ POST /service-logs/:id/void         {reason}                                    
      - A repaired mark drops off the inspection form's grey dots. The truck page keeps it, greyed out, under "Repaired", with
        when, who and the maintenance entry; nothing is deleted. Voiding that maintenance entry puts the damage back on file.
      - Data: an additive migration with a separate repairs record per mark (damage marks stay read-only, like inspections).
+     - A supervisor's "mark repaired" can be undone (reason required) if it was a mistake; the repair record and its photo
+       are kept and the damage goes back on file. A Log fix is undone by voiding its maintenance entry.
      - Feeds the lease-return checklist's "damage repaired" step in fleet management.
    - **Archive or delete inspections (built 2026-11-11, migration 005):** for mistakes (wrong truck, a duplicate, a test)
      and for clearing old ones out of the lists. It has to fit §4a ("nothing is hard-deleted from the app"), so proposed:
