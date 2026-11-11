@@ -216,7 +216,10 @@ POST /service-logs/:id/void         {reason}                                    
        in its own record (additive migration), with who, when and why, and every archive/delete/restore is kept as history.
      - **Deleted inspections are never erased (Tyler, 2026-11-11):** they stay recoverable from the Deleted list for good. No
        purge, no automatic clean-up, and no erase tool.
-     - Open question for Tyler: does archiving also take its open repairs and damage off the truck, or only deleting?
+     - **Archiving also takes the inspection's open repairs and damage off the truck (Tyler, 2026-11-11)**, the same as
+       deleting: they leave the open-repairs lists and "Damage on file" while it's archived, and come back if it's
+       un-archived. So nothing drops out of sight by accident, the Archive confirmation names what will come off (e.g.
+       "2 open repairs and 1 damage mark will come off AZ018's page").
    - **Fleet management:** add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
      and the rest of the truck's lifecycle. Scope to confirm with Tyler before building; proposed:
      status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage
