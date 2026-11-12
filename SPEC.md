@@ -75,7 +75,10 @@ Tunnel, which needs a domain on Tyler's Cloudflare account.
 5. **Inspection detail:** everything submitted, repairs listed first, damage diagram with pins, photo gallery with full-screen view, full checklist, signatures. Supervisor sign-off happens here (name + finger signature). **Export PDF** button.
    **Archive or delete** card (§9): Archive / Un-archive (supervisor+), Delete / Restore (admin), with the history of each change;
    an archived or deleted inspection shows a banner saying so.
-6. **Repairs board** (supervisor): all open repair items across the fleet, filterable by truck. Mark resolved with a note, optionally linked to a service log entry.
+6. **Repairs board** (built; supervisor, shop, admin; Menu or the home screen button with the open count): all open repair
+   items across the fleet from live inspections on trucks in service, filterable by truck, grouped by truck (oldest first) or
+   one list oldest first, each with how long it's been open (amber from 14 days, red from 30) and its photos. Resolve with a
+   note (supervisor/admin) or Log fix to close it through a maintenance entry (shop/admin).
 6a. **Maintenance log** (shop, admin; supervisors can read): on the truck page, "Next due" (from the newest entry of each type,
    orange within 500 miles or 14 days, red when due), the list of entries, and "+ Log maintenance". The entry form has date,
    mileage, types of work (one or more of: oil change, tires, brakes, repair, preventive maintenance, inspection/registration,
@@ -168,6 +171,7 @@ GET  /inspections/:id
 POST /inspections/:id/review     {signature (png)}        supervisor+
 POST /inspection-items/:id/resolve {note}                 supervisor+
 GET  /inspections/:id/pdf
+GET  /repairs?vehicle_id                 -> open repairs across the fleet (repairs board)   supervisor, shop, admin
 GET  /export/inspections.csv?from&to&vehicle
 admin CRUD: /vehicles, /trailers, /diagrams, /users, /checklist-items
 
@@ -242,7 +246,8 @@ POST /service-logs/:id/void         {reason}                                    
      status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage
      allowance), a lease-return checklist (damage repaired, keys, documents, final inspection and photos), registration and
      insurance dates with reminders, and trailers as their own assets.
-   - **Batch PDF export as separate PDFs (built, see §6).** Still to do: CSV export, repairs board, checklist editor.
+   - **Batch PDF export as separate PDFs (built, see §6)** and the **repairs board (built, see §4 item 6)**.
+     Still to do: CSV export, checklist editor.
 3. **Code review and hardening:** full code review; review and optimize performance while keeping stability; a burn-in test
    (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
 4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins;

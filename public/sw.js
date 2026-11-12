@@ -30,6 +30,7 @@ const SHELL_FILES = [
   "/js/views/export.js",
   "/js/views/form.js",
   "/js/views/home.js",
+  "/js/views/repairs.js",
   "/js/views/service-detail.js",
   "/js/views/service-form.js",
   "/js/views/signin.js",

@@ -32,7 +32,8 @@ on the phone and upload when signal returns.
 | Maintenance log: several types of work on one entry (multi-select, next-due per type) | done |
 | Mark damage repaired (photo of the fix required; Log fix or supervisor; drops off the form's grey dots, kept on the truck page) | done |
 | Archive or delete inspections (delete = recoverable forever, admin only, reason required); database refuses to erase inspections | done |
-| CSV export, repairs board, checklist editor | not started |
+| Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve | done |
+| CSV export, checklist editor | not started |
 
 ## Layout
 

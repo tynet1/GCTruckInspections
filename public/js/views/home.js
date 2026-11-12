@@ -24,6 +24,7 @@ export async function render(app) {
   homeHeader({ showUser: true, actions: [{ label: "Menu", onclick: openMenu }] });
   app.innerHTML = `
     <input class="search" id="q" type="search" placeholder="Search truck, plate, VIN…" value="${esc(query)}" autocomplete="off" aria-label="Search trucks">
+    ${can.seeService() ? `<a class="secondary wide" id="rbLink" href="#/repairs" style="margin-top:12px">Repairs board</a>` : ""}
     <div id="review"></div>
     <h2>Pick a truck</h2><div id="trucks"><div class="empty">Loading trucks…</div></div>
     ${recentBlocks()}`;
@@ -40,6 +41,12 @@ export async function render(app) {
     $("#recentSvc").innerHTML = recentSvc instanceof Error
       ? errorHtml(recentSvc)
       : recentSvc.length ? recentSvc.map((s) => serviceRow(s, { showTruck: true })).join("") : `<div class="empty">No maintenance logged yet.</div>`;
+  }
+
+  const rb = $("#rbLink");
+  if (rb && !(vehicles instanceof Error)) {
+    const open = vehicles.reduce((n, v) => n + Number(v.open_repairs || 0), 0);
+    rb.textContent = open ? `Repairs board · ${open} open` : "Repairs board · none open";
   }
 
   const draftBy = new Map(drafts.map((d) => [d.vehicleId, d]));

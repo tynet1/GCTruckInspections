@@ -59,6 +59,8 @@ if [ "${1:-}" != "loop" ]; then
 fi
 
 echo "$(date '+%F %T') backup loop started: daily after ${HOUR}:00, keeping ${KEEP} days"
+# After the PC (or Docker) restarts, every container starts at once; wait for the database before the first try.
+for _ in $(seq 1 60); do pg_isready -q && break; sleep 5; done
 while true; do
   today=$(date +%Y-%m-%d)
   hour=$(date +%H)

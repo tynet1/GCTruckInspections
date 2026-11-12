@@ -137,8 +137,11 @@ How it's set up on Tyler's PC (since 2026-11-11):
   connect but `http://localhost` works on the PC, check that rule and whether the phone's Wi-Fi can reach the PC's network.
 - Plain `http://` by IP works for everything except the offline app shell and "Share as separate PDFs", which need
   HTTPS (the Cloudflare Tunnel). Drafts still save on the phone over plain http.
-- It's only reachable while the PC is on and awake: turn on Docker Desktop's **Start Docker Desktop when you sign in**,
-  and set Windows not to sleep while plugged in. The containers restart on their own (`restart: unless-stopped`).
+- It's only reachable while the PC is on and awake, and Docker Desktop is running. **Turn on Docker Desktop → Settings →
+  General → "Start Docker Desktop when you sign in to your computer"**, and check it's not switched off under Windows
+  Settings → Apps → Startup. (On 2026-11-11 Windows restarted the PC and Docker didn't come back, so the app was down
+  until the next morning.) Set Windows not to sleep while plugged in. Once Docker is running, the containers restart
+  on their own (`restart: unless-stopped`), and the backup waits for the database before its first try.
 - Run the scripts from **Git Bash** (`sh scripts/restore.sh ...`); they handle Git Bash's path rewriting.
 - Backups land in `C:\Code\GCTruckInspections\backups` (same disk as the data). Copy that folder somewhere else
   regularly, e.g. a network share, until the app moves to a server with a proper second backup location.

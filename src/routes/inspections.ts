@@ -521,6 +521,32 @@ export default async function inspectionRoutes(app: FastifyInstance) {
         WHERE s.state = 'deleted'
         ORDER BY s.changed_at DESC LIMIT 500`));
 
+  // Repairs board: every open repair across the fleet (live inspections, trucks in service), oldest first per truck.
+  app.get("/repairs", { preHandler: requireRole("supervisor", "shop") }, async (req) => {
+    const qs = (req.query ?? {}) as Record<string, string | undefined>;
+    const params: unknown[] = [];
+    let truck = "";
+    if (qs.vehicle_id) {
+      if (!/^\d+$/.test(qs.vehicle_id)) throw bad("vehicle_id must be a number.");
+      params.push(Number(qs.vehicle_id));
+      truck = `AND v.id = $${params.length}`;
+    }
+    return q(
+      `SELECT ii.id, ii.section, ii.label_snapshot AS label, ii.note,
+              i.id AS inspection_id, i.inspection_date, i.inspector_name,
+              v.id AS vehicle_id, v.truck_code, v.year, v.make, v.model,
+              (current_date - i.inspection_date) AS days_open,
+              ARRAY(SELECT p.id FROM photos p WHERE p.inspection_item_id = ii.id ORDER BY p.created_at, p.id) AS photo_ids
+         FROM inspection_items ii
+         JOIN live_inspections i ON i.id = ii.inspection_id
+         JOIN vehicles v ON v.id = i.vehicle_id
+        WHERE ii.result = 'repair' AND ii.resolved_at IS NULL AND v.active ${truck}
+        ORDER BY v.truck_code, i.inspection_date, i.created_at, ii.section, ii.id
+        LIMIT 2000`,
+      params,
+    );
+  });
+
   app.post("/inspection-items/:id/resolve", { preHandler: requireRole("supervisor", "shop") }, async (req) => {
     const id = idParam(req.params);
     const b = obj(req.body ?? {});

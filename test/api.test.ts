@@ -1004,4 +1004,71 @@ if (!url) {
       await inject("POST", `/inspections/${insp.inspection_id}/unarchive`, { cookie: adminCookie, body: {} });
     });
   });
+
+  describe("repairs board", () => {
+    let adminCookie = "";
+    let shopCookie = "";
+    let truckA = 0;
+    let truckB = 0;
+    const ids: Record<string, number> = {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const board = async (qs = ""): Promise<any[]> => {
+      const res = await inject("GET", `/repairs${qs}`, { cookie: supCookie });
+      assert.equal(res.statusCode, 200, res.body);
+      return res.json();
+    };
+    const mine = (rows: { id: number }[]) => rows.map((r) => r.id).filter((id) => Object.values(ids).includes(id));
+
+    before(async () => {
+      adminCookie = cookieOf(await inject("POST", "/auth/login", { body: { email: "admin@test.local", password: "admin-password-1" } }));
+      const shop = await one(`SELECT id FROM users WHERE name = 'Frank Shop'`);
+      shopCookie = cookieOf(await inject("POST", "/auth/pin", { body: { user_id: shop.id, pin: "1357" } }));
+      const ts = await q(`SELECT id FROM vehicles WHERE truck_code NOT IN ('AZ018', 'AZ002') ORDER BY id OFFSET 4 LIMIT 2`);
+      [truckA, truckB] = ts.map((t: { id: number }) => t.id);
+      const submit = async (truck: number, date: string, notes: string[], photo?: string) => {
+        const body = submitBody({ vehicle_id: truck, inspection_date: date, mileage: 50000, damage: [] });
+        body.items = (body.items as { checklist_item_id: number; result: string; note?: string }[]).map((it, n) =>
+          n < notes.length ? { ...it, result: "repair", note: notes[n] } : it);
+        if (photo) body.photos = [{ id: photo, caption: "Leak", checklist_item_id: (body.items as { checklist_item_id: number }[])[0].checklist_item_id }];
+        const res = await inject("POST", "/inspections", { cookie: crewCookie, body });
+        assert.equal(res.statusCode, 201, res.body);
+        const items = await q(`SELECT id, note FROM inspection_items WHERE inspection_id = $1 AND result = 'repair'`, [res.json().id]);
+        for (const it of items) ids[it.note] = it.id;
+        return res.json().id as string;
+      };
+      const { id: photoId } = await uploadPhoto(crewCookie);
+      await submit(truckA, "2026-09-01", ["Oil leak", "Wiper torn"], photoId);
+      await submit(truckB, "2026-11-01", ["Mirror cracked"]);
+      const archived = await submit(truckB, "2026-11-05", ["On an archived inspection"]);
+      await inject("POST", `/inspections/${archived}/archive`, { cookie: supCookie, body: {} });
+    });
+
+    test("supervisors and the shop see it; crew don't", async () => {
+      assert.equal((await inject("GET", "/repairs", { cookie: crewCookie })).statusCode, 403);
+      assert.equal((await inject("GET", "/repairs", { cookie: shopCookie })).statusCode, 200);
+      assert.equal((await inject("GET", "/repairs?vehicle_id=x", { cookie: supCookie })).statusCode, 400);
+    });
+
+    test("every open repair across the fleet, oldest first per truck, with age and photos; archived ones left out", async () => {
+      const rows = await board();
+      assert.deepEqual(mine(rows).sort(), [ids["Oil leak"], ids["Wiper torn"], ids["Mirror cracked"]].sort());
+      const leak = rows.find((r) => r.id === ids["Oil leak"]);
+      assert.equal(leak.vehicle_id, truckA);
+      assert.ok(leak.truck_code);
+      assert.equal(leak.inspection_date, "2026-09-01");
+      assert.ok(leak.days_open >= 60, "days since the inspection");
+      assert.equal(leak.photo_ids.length, 1);
+      assert.deepEqual(rows.find((r) => r.id === ids["Mirror cracked"]).photo_ids, []);
+      assert.deepEqual(mine(await board(`?vehicle_id=${truckB}`)), [ids["Mirror cracked"]]);
+    });
+
+    test("resolved repairs and retired trucks drop off", async () => {
+      await inject("POST", `/inspection-items/${ids["Wiper torn"]}/resolve`, { cookie: supCookie, body: { note: "New blade" } });
+      assert.deepEqual(mine(await board()).sort(), [ids["Oil leak"], ids["Mirror cracked"]].sort());
+      const retire = await inject("PATCH", `/admin/vehicles/${truckB}`, { cookie: adminCookie, body: { active: false } });
+      assert.equal(retire.statusCode, 200, retire.body);
+      assert.deepEqual(mine(await board()), [ids["Oil leak"]]);
+      await inject("PATCH", `/admin/vehicles/${truckB}`, { cookie: adminCookie, body: { active: true } });
+    });
+  });
 }
