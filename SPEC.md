@@ -252,6 +252,16 @@ POST /service-logs/:id/void         {reason}                                    
    (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
 4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins;
    move off Tyler's machine to a company VM or Azure.
+5. **Wishlist (Tyler, 2026-11-12; not scheduled):**
+   - **Incident reports.** No form to model it on yet; design it once Tyler has one (an insurance carrier's or HR's form, or
+     a sample of what's filled out today), so the PDF can match it the way the inspection PDF matches the paper sheet.
+     Starting point to confirm then: filed from the phone by whoever was there, tied to a truck (and trailer) when one was
+     involved; date, time and location; what happened; people involved and any injuries; the other party, their vehicle and
+     insurance; police report number; photos, damage pins on the truck diagram and a signature; supervisor review and a PDF.
+     Same data rules as inspections (§4a): read-only once submitted, corrections in a supervisor note, archive/delete without
+     erasing. To ask Tyler: does it cover only vehicle accidents, or also injuries, property damage and near misses with no
+     truck involved; who files and who has to be told right away; and should its damage go into the truck's "Damage on file"
+     and repair items.
 
 ## 10. Acceptance checklist for MVP
 
