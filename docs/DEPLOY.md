@@ -136,6 +136,28 @@ opened (the service worker refreshes when the files change).
 The droplet's firewall (UFW) limits SSH: 6 or more new connections from one address within 30 seconds gets that
 address refused for a while, so don't script rapid back-to-back `ssh` calls.
 
+## Firewall (DigitalOcean Cloud Firewall)
+
+The site is reached through Cloudflare, but the droplet's own address (143.198.143.2) also answers on 80 and 443 to
+anyone, and UFW can't close that: Docker's published ports go around UFW. A DigitalOcean Cloud Firewall (free) sits in
+front of the droplet and can. Set it up in the DigitalOcean control panel:
+
+1. **Networking → Firewalls → Create Firewall.** Name it `gc-inspections`.
+2. **Inbound rules.** Delete the default rule, then add:
+   - **SSH**, TCP 22. Sources: the office's public IP (from the office, search "what is my IP"). Add your home IP too if
+     you work from there. This PC's deploys come from the office address.
+   - **HTTP**, TCP 80, and **HTTPS**, TCP 443. Sources: Cloudflare's ranges, pasted one per line from
+     cloudflare.com/ips (15 IPv4 and 7 IPv6 as of 2026-11-17; the same list is in `src/auth.ts`). Port 80 has to stay
+     open to Cloudflare: Caddy renews its certificate through it.
+3. **Outbound rules:** leave the defaults (all allowed): the droplet needs them for updates, GitHub and Docker images.
+4. **Apply to Droplets:** pick the droplet, then **Create Firewall**.
+5. **Check it:** the site still opens at https://app.tylerlongshore.com; `ssh` works from the office; from a phone on
+   cell data, `http://143.198.143.2` now times out instead of answering.
+
+If you ever lock yourself out of SSH, the droplet's **Access → Recovery Console** in the control panel still works, or
+edit the firewall's SSH rule to add your current address. Cloudflare rarely changes its ranges, but check
+cloudflare.com/ips once a year and update both the firewall and `src/auth.ts` if it has.
+
 ## Windows PC (Docker Desktop)
 
 No longer the host (the droplet is, since 2026-11-12). The old copy's containers are gone from the PC (checked

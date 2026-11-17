@@ -61,8 +61,9 @@ Hardening for the open internet (done 2026-11-17, migration 009):
   photos and keeps retrying, and the draft shows why.
 - HSTS over HTTPS (one year).
 
-Still open: 4-digit crew PINs (6-digit would make guessing 100 times harder) and the public crew name list, both
-Tyler's call; backups that stay on the droplet.
+Tyler's decisions (2026-11-17): keep 4-digit crew PINs and the public crew name list; backups staying on the droplet
+are fine for now. He'll add a DigitalOcean Cloud Firewall (web only from Cloudflare, SSH only from the office) and
+remove the unused UFW rules for 2375/2376; steps in docs/DEPLOY.md "Firewall".
 
 ## 4. Screens (all phone-first, also good on iPad)
 
@@ -275,12 +276,17 @@ POST /service-logs/:id/void         {reason}                                    
        un-archived. So nothing drops out of sight by accident, the Archive confirmation names what will come off (e.g.
        "2 open repairs and 1 damage mark will come off AZ018's page").
    - **Fleet management:** add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
-     and the rest of the truck's lifecycle. Scope to confirm with Tyler before building; proposed:
-     status (in service, in the shop, preparing for return, returned, sold), lease info (lessor, start/end dates, mileage
-     allowance), a lease-return checklist (damage repaired, keys, documents, final inspection and photos), registration and
-     insurance dates with reminders, and trailers as their own assets.
+     and the rest of the truck's lifecycle. Tyler's answers (2026-11-17):
+     - **Status:** in service, in the shop, **on hold** (Tyler added it), preparing for return, returned, sold. Shop,
+       supervisors and admins can change it; every change is kept with who and when.
+     - **Lease details and the lease-return checklist:** Tyler doesn't have them yet, so they wait. Build the rest without
+       them and add the fields when he has a lease and a return form.
+     - **Reminders** (registration, service due, and later insurance and lease end): an in-app list for supervisors.
+     - **Trailers** are their own numbered assets. They move between trucks, but not often: each trailer is on one truck
+       at a time and can be reassigned, with the history kept.
    - **Batch PDF export as separate PDFs (built, see §6)** and the **repairs board (built, see §4 item 6)**.
-     **CSV export (built, see §6).** Still to do: checklist editor.
+     **CSV export (built, see §6).** Still to do: checklist editor. **Admin only**, and changes apply to new inspections
+     only; submitted inspections keep the items they had (Tyler, 2026-11-17).
 3. **Code review and hardening:** full code review; review and optimize performance while keeping stability; a burn-in test
    (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
 4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins.
@@ -297,38 +303,44 @@ POST /service-logs/:id/void         {reason}                                    
      overwritten and the new date is shown. Every change, including Admin → Trucks edits and any made outside the app, is kept
      for good in a registration history (who, when, from where, old and new date, note, photo) listed on the truck page.
      An inspection, its detail screen and its PDF show the date that was on file when it was submitted; one set while
-     signing it off shows on that inspection. Not asked yet, so left out: crew entering it (a supervisor confirms), and the
-     same for plate or insurance.
+     signing it off shows on that inspection. Tyler (2026-11-17): crew don't enter it, and plate and insurance don't get the
+     same update.
    - **Yard inspections (2026-11-17, after the yard fire on 11/13/26).** A walk-through of a yard on its own checklist,
      with the same OK / Repair, notes, photos and signature as a truck inspection. Each finding becomes an open item on the
      repairs board until someone resolves it with a note. A fire-focused starting checklist to confirm: extinguishers present,
      charged and tagged; fuel and oil in closed cans or a cabinet, away from heat; oily rags in a closed metal can; green-waste
      and debris piles small and away from buildings, fences and equipment; mower decks and engines cleaned of clippings;
      equipment parked to cool away from piles; battery chargers and cords in good shape and not left charging unattended;
-     clear access for fire trucks; gates, locks and lighting; emergency numbers posted. To ask Tyler: is there a paper form
-     or what the fire review called for; which yards (each a location in the app); how often (daily lock-up walk, weekly);
-     who does it; and who gets told about a failed item right away.
+     clear access for fire trucks; gates, locks and lighting; emergency numbers posted. Tyler's answers (2026-11-17): no
+     paper form yet, so start from the checklist above; one yard for now, **AZ**; **daily**, done by a **supervisor**; a
+     failed item notifies **supervisors in the app** (an in-app notification first; a push to the phone can follow, which
+     needs the app added to the home screen on iPhone but no paid service).
    - **Equipment inspections (2026-11-17).** Inspections of equipment other than trucks, each piece with its own ID, its
      type's checklist and hours instead of mileage where it has a meter. Needs equipment as assets (add, retire, history),
-     which overlaps fleet management. To ask Tyler: what equipment (mowers, trailers, skid steers, handhelds?); is each piece
-     numbered or tagged; is there a paper form per type; daily pre-use or periodic; and does equipment get maintenance
-     entries and next-due like trucks.
+     which overlaps fleet management. Tyler's answers (2026-11-17): the **yard-care equipment carried on the trailers**,
+     about **8 pieces** (string trimmers, blowers and the like); each is numbered or tagged; **periodic** inspections for
+     now; equipment gets **maintenance entries and next-due** like trucks. Paper forms per type: ask for copies if they exist.
    - **PDF repair ticket (2026-11-17).** A printable or shareable ticket for repairs that go to the shop or an outside vendor.
      Proposed: from the repairs board or a truck page, pick one or more open repairs on a truck and make a ticket. The ticket
      carries a ticket number, branding, the truck (code, VIN, plate, last mileage), each problem with its note, photos, who
      reported it and when, and blank lines for the shop: work done, parts, cost, date, signature. The ticket is logged on the
-     truck, and closing its repairs still goes through a maintenance entry (Log fix), which can name the ticket. To ask
-     Tyler: who gets it (Frank's shop, outside vendors, both); printed, emailed or shared from the phone; one problem per
-     ticket or several; and does anything in the shop's world need a matching number (a PO, a vendor work order).
+     truck, and closing its repairs still goes through a maintenance entry (Log fix), which can name the ticket. Tyler's
+     answers (2026-11-17): it goes to **both** Frank's shop and outside vendors; it's a PDF that can be **printed, shared
+     or emailed** from the phone's share sheet (no mail service needed); a ticket holds **one or several** repairs on one
+     truck (whatever is ticked); **no PO or work-order number** for now.
    - **Incident reports (2026-11-12).** No form to model it on yet; design it once Tyler has one (an insurance carrier's or HR's form, or
      a sample of what's filled out today), so the PDF can match it the way the inspection PDF matches the paper sheet.
      Starting point to confirm then: filed from the phone by whoever was there, tied to a truck (and trailer) when one was
      involved; date, time and location; what happened; people involved and any injuries; the other party, their vehicle and
      insurance; police report number; photos, damage pins on the truck diagram and a signature; supervisor review and a PDF.
      Same data rules as inspections (§4a): read-only once submitted, corrections in a supervisor note, archive/delete without
-     erasing. To ask Tyler: does it cover only vehicle accidents, or also injuries, property damage and near misses with no
-     truck involved; who files and who has to be told right away; and should its damage go into the truck's "Damage on file"
-     and repair items.
+     erasing. Tyler's answers (2026-11-17): **vehicle incidents only** for now; **supervisors** file them and **supervisors**
+     are told right away; damage from an incident **goes into the truck's "Damage on file" and repair items**. Still waiting
+     on a sample form.
+6. **Build order (Tyler left it to Claude, 2026-11-17):** PDF repair ticket (fully answered, small) → checklist editor
+   with inspection types and equipment/trailers as assets (the shared foundation) → yard inspections (daily, AZ) →
+   equipment inspections → fleet management (status, trailers, supervisor reminders; lease details when Tyler has them)
+   → incident reports once a sample form arrives. Phase 3 (code review, burn-in) after those.
 
 ## 10. Acceptance checklist for MVP
 
