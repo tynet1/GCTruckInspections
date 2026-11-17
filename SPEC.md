@@ -252,8 +252,40 @@ POST /service-logs/:id/void         {reason}                                    
    (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
 4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins;
    move off Tyler's machine to a company VM or Azure.
-5. **Wishlist (Tyler, 2026-11-12; not scheduled):**
-   - **Incident reports.** No form to model it on yet; design it once Tyler has one (an insurance carrier's or HR's form, or
+5. **Wishlist (Tyler; not scheduled):** Yard and equipment inspections share one foundation: an inspection type for
+   something other than a truck (a yard, a piece of equipment), each type with its own checklist. That foundation is the
+   phase-2 checklist editor plus "assets" beyond trucks (trailers are already in fleet management's scope), so build those
+   together rather than three times. Quickest win: the registration update.
+   - **Supervisors update the registration expiration from an inspection (2026-11-17).** Today only an admin can change it
+     (Admin → Trucks), and the inspection form doesn't show it. Proposed: the form, and the supervisor's sign-off screen, show
+     the truck's registration expiration (red if expired, amber within 30 days); a supervisor+ can tap **Update** and enter
+     the new date, optionally with a photo of the new registration or sticker. It changes the truck, not the inspection
+     (submitted inspections stay read-only). Every change is kept in a dated history with who and when (today a truck edit
+     just overwrites the old value), and the inspection PDF shows the date that was on file on the inspection's date instead of
+     today's. To ask Tyler: may crew enter it too (a supervisor confirms), and does anything else (plate, insurance) need the
+     same treatment?
+   - **Yard inspections (2026-11-17, after the yard fire on 11/13/26).** A walk-through of a yard on its own checklist,
+     with the same OK / Repair, notes, photos and signature as a truck inspection. Each finding becomes an open item on the
+     repairs board until someone resolves it with a note. A fire-focused starting checklist to confirm: extinguishers present,
+     charged and tagged; fuel and oil in closed cans or a cabinet, away from heat; oily rags in a closed metal can; green-waste
+     and debris piles small and away from buildings, fences and equipment; mower decks and engines cleaned of clippings;
+     equipment parked to cool away from piles; battery chargers and cords in good shape and not left charging unattended;
+     clear access for fire trucks; gates, locks and lighting; emergency numbers posted. To ask Tyler: is there a paper form
+     or what the fire review called for; which yards (each a location in the app); how often (daily lock-up walk, weekly);
+     who does it; and who gets told about a failed item right away.
+   - **Equipment inspections (2026-11-17).** Inspections of equipment other than trucks, each piece with its own ID, its
+     type's checklist and hours instead of mileage where it has a meter. Needs equipment as assets (add, retire, history),
+     which overlaps fleet management. To ask Tyler: what equipment (mowers, trailers, skid steers, handhelds?); is each piece
+     numbered or tagged; is there a paper form per type; daily pre-use or periodic; and does equipment get maintenance
+     entries and next-due like trucks.
+   - **PDF repair ticket (2026-11-17).** A printable or shareable ticket for repairs that go to the shop or an outside vendor.
+     Proposed: from the repairs board or a truck page, pick one or more open repairs on a truck and make a ticket. The ticket
+     carries a ticket number, branding, the truck (code, VIN, plate, last mileage), each problem with its note, photos, who
+     reported it and when, and blank lines for the shop: work done, parts, cost, date, signature. The ticket is logged on the
+     truck, and closing its repairs still goes through a maintenance entry (Log fix), which can name the ticket. To ask
+     Tyler: who gets it (Frank's shop, outside vendors, both); printed, emailed or shared from the phone; one problem per
+     ticket or several; and does anything in the shop's world need a matching number (a PO, a vendor work order).
+   - **Incident reports (2026-11-12).** No form to model it on yet; design it once Tyler has one (an insurance carrier's or HR's form, or
      a sample of what's filled out today), so the PDF can match it the way the inspection PDF matches the paper sheet.
      Starting point to confirm then: filed from the phone by whoever was there, tied to a truck (and trailer) when one was
      involved; date, time and location; what happened; people involved and any injuries; the other party, their vehicle and
