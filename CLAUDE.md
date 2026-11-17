@@ -44,7 +44,8 @@ npm run user -- add --name "X" --role crew --pin 1234
 - It runs on a DigitalOcean droplet that Tyler set up and updates himself (since 2026-11-12); Tyler's Windows PC no longer
   hosts it, though an old copy (`gc-inspections`) still starts whenever Docker Desktop starts there. The droplet holds the
   real data: never test against it. Test locally (a throwaway Postgres for `npm test`, or a separate `COMPOSE_PROJECT_NAME`
-  such as `gc-test` on port 8080). Updating the droplet is `git pull && docker compose up -d --build` there.
+  such as `gc-test` on port 8080). Claude reaches it from Tyler's PC with its own SSH key (alias `gc-droplet`, app in `/opt/gctruckinspections`); deploy
+  with `docs/DEPLOY.md` §6 (labeled backup first, rebuild under `nohup`, then compare the data before and after).
 - Phase 1 (MVP) is built, plus trailer types and branding. Phase 2: the maintenance log is built (`src/routes/service.ts`,
   `public/js/svc.js`, `views/service-*.js`), and so is batch PDF export (`views/export.js`, `public/js/zip.js`). Fleet
   management is next; confirm the open fleet-management questions in SPEC §9 with Tyler before building it.

@@ -119,13 +119,22 @@ COMPOSE_PROJECT_NAME=gc-test BACKUP_DIR=./backups-test docker compose down -v   
 
 ## 6. Updating
 
+Take a labeled backup first, then pull and rebuild. On the droplet the app is in `/opt/gctruckinspections`.
+
 ```bash
-git pull
-docker compose up -d --build
+docker compose exec -T backup /bin/sh /backup.sh before-update
+git pull --ff-only
+nohup sh -c 'docker compose up -d --build app > ~/gc-deploy.log 2>&1; echo EXIT=$? >> ~/gc-deploy.log' &
 ```
 
-Database migrations run automatically when the app starts. Phones pick up the new version the next time the
-app is opened (the service worker refreshes when the files change).
+The rebuild takes a few minutes. Running it under `nohup` means a dropped SSH connection can't cancel it halfway;
+`tail ~/gc-deploy.log` shows `EXIT=0` when it's done, and `docker compose ps` shows the app `healthy` about 30
+seconds later. Until the new container starts, the old one keeps serving. Database migrations run automatically when
+the app starts (`docker compose logs app | grep migration`). Phones pick up the new version the next time the app is
+opened (the service worker refreshes when the files change).
+
+The droplet's firewall (UFW) limits SSH: 6 or more new connections from one address within 30 seconds gets that
+address refused for a while, so don't script rapid back-to-back `ssh` calls.
 
 ## Windows PC (Docker Desktop)
 
