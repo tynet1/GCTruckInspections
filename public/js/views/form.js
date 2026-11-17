@@ -63,6 +63,7 @@ export async function render(app, vehicleId) {
     vehicle,
     sections,
     trailerDiagramUrl: vehicle.trailer_diagram_url || config.trailer_diagram_url,
+    checklistAsOf: config.as_of || null, // when this checklist was loaded (older cached copies don't have it)
     prevDamage: last.damage || [],
     prevMileage: vehicle.last_mileage ?? last.inspection?.mileage ?? null,
     persistent: await idb.isPersistent(),
@@ -517,6 +518,7 @@ function buildPayload() {
     // The pictures the pins were placed on, so the record keeps them even if the truck is changed later.
     truck_diagram_id: ctx.vehicle.diagram_id ?? null,
     trailer_diagram_id: d.trailerOn ? ctx.vehicle.trailer_diagram_id ?? null : null,
+    checklist_as_of: ctx.checklistAsOf,
     items: items.map((it) => {
       const a = d.answers[it.id];
       return { checklist_item_id: it.id, result: a.r, note: a.r === "repair" ? a.n.trim() : null };

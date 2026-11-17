@@ -360,10 +360,11 @@ export default async function vehicleRoutes(app: FastifyInstance) {
   // Everything the inspection form needs that isn't truck-specific.
   app.get("/form-config", async () => {
     const checklist = await q(
-      `SELECT id, section, label, sort_order FROM checklist_items WHERE active ORDER BY section, sort_order`,
+      `SELECT id, section, label, sort_order FROM checklist_items WHERE active ORDER BY section, sort_order, id`,
     );
     const trailer = await defaultDiagram("trailer");
-    return { checklist, trailer_diagram_url: diagramUrl(trailer?.id ?? null, trailer?.file_path ?? null) };
+    // as_of: the phone sends it back with the inspection, so items added after this aren't demanded of it.
+    return { checklist, trailer_diagram_url: diagramUrl(trailer?.id ?? null, trailer?.file_path ?? null), as_of: new Date().toISOString() };
   });
 
   app.get("/diagrams", async () => {

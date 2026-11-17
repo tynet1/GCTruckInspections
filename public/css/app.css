@@ -164,6 +164,8 @@ body.has-bar .netbar{bottom:calc(69px + env(safe-area-inset-bottom))}
 .tabs{display:flex;gap:8px;margin-top:14px}
 .tabs a{flex:1;text-align:center;padding:12px;border-radius:12px;background:#fff;border:1px solid var(--line);font-weight:650;text-decoration:none;color:var(--ink);min-height:46px}
 .tabs a.on{background:var(--brand);color:var(--on-brand);border-color:var(--brand)}
+/* Five admin tabs don't fit across a phone: three on the first row, two on the second. */
+@media (max-width:520px){.tabs{flex-wrap:wrap}.tabs a{flex:1 1 30%;padding:12px 6px}}
 .thumb{width:100%;max-height:180px;object-fit:contain;background:#fafafa;border:1px solid var(--line);border-radius:10px;display:block}
 .subhead{font-size:13px;font-weight:700;color:var(--ink);margin:18px 0 8px;padding-top:12px;border-top:1px solid var(--line)}
 .subhead:first-of-type{border-top:0;padding-top:0;margin-top:4px}
@@ -196,6 +198,8 @@ body.has-bar .netbar{bottom:calc(69px + env(safe-area-inset-bottom))}
 .list .item .grow{flex:1;min-width:0}
 .clip{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .list .item.voided{opacity:.6}
+.ckrow .mv{min-width:44px;padding:0;font-size:18px}
+.ckrow .mv:disabled{opacity:.35}
 /* Several types of work, each with its own next-due */
 .nextrow b{display:block;margin-bottom:6px}
 .nextrow+.nextrow{border-top:1px solid var(--line);margin-top:12px;padding-top:12px}

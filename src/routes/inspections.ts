@@ -29,6 +29,11 @@ export interface SubmitInput {
   /** The pictures the phone showed (older drafts don't send these; the truck's current ones are used). */
   truck_diagram_id: number | null;
   trailer_diagram_id: number | null;
+  /**
+   * When the phone fetched the checklist it showed (form-config's as_of). Items added to the checklist after that aren't
+   * required; older drafts and cached forms don't send it, and then every current item is.
+   */
+  checklist_as_of: Date | null;
   items: ItemIn[];
   damage: DamageIn[];
   photos: PhotoIn[];
@@ -65,6 +70,13 @@ export function parseSubmit(body: unknown): SubmitInput {
   if (b.trailer != null) {
     const t = obj(b.trailer, "trailer");
     trailer = { number: str(t.number, "Trailer number", 50), plate: str(t.plate, "Trailer plate", 20) };
+  }
+
+  let asOf: Date | null = null;
+  if (b.checklist_as_of != null) {
+    const t = new Date(String(b.checklist_as_of));
+    if (Number.isNaN(t.getTime())) throw bad("checklist_as_of must be a date and time.");
+    asOf = t;
   }
 
   const items = arr(b.items, "checklist items", 200).map((x, i): ItemIn => {
@@ -112,6 +124,7 @@ export function parseSubmit(body: unknown): SubmitInput {
     trailer,
     truck_diagram_id: b.truck_diagram_id == null ? null : int(b.truck_diagram_id, "truck_diagram_id", 1),
     trailer_diagram_id: b.trailer_diagram_id == null ? null : int(b.trailer_diagram_id, "trailer_diagram_id", 1),
+    checklist_as_of: asOf,
     items,
     damage,
     photos,
@@ -139,11 +152,16 @@ export async function submitInspection(input: SubmitInput, userId: number) {
   const truckDiagram = await pickDiagram([input.truck_diagram_id, vehicle.diagram_id], "truck");
   const trailerDiagram = input.trailer ? await pickDiagram([input.trailer_diagram_id, vehicle.trailer_diagram_id], "trailer") : null;
 
-  // Every active checklist item in the visible sections must be answered, and nothing else.
+  // Answers must be to checklist items in the visible sections; retired ones still count (the form may have shown them
+  // before an admin retired them). Every active item must be answered, except ones added to the checklist after the
+  // phone loaded it (checklist_as_of), so editing the checklist never bounces an inspection that's being filled in.
+  // A claimed checklist time is taken back at most 90 days, so the original items can never be skipped.
   const sections: Section[] = input.trailer ? ["exterior", "interior", "trailer"] : ["exterior", "interior"];
-  const checklist = await q<{ id: number; section: Section; label: string }>(
-    `SELECT id, section, label FROM checklist_items WHERE active AND section = ANY($1::checklist_section[]) ORDER BY section, sort_order`,
-    [sections],
+  const checklist = await q<{ id: number; section: Section; label: string; active: boolean; required: boolean }>(
+    `SELECT id, section, label, active,
+            active AND created_at <= GREATEST(LEAST(COALESCE($2::timestamptz, now()), now()), now() - interval '90 days') AS required
+       FROM checklist_items WHERE section = ANY($1::checklist_section[]) ORDER BY section, sort_order, id`,
+    [sections, input.checklist_as_of],
   );
   const byId = new Map(checklist.map((c) => [c.id, c]));
   const answered = new Map<number, ItemIn>();
@@ -154,7 +172,7 @@ export async function submitInspection(input: SubmitInput, userId: number) {
     if (answered.has(it.checklist_item_id)) throw bad("A checklist item was answered twice.");
     answered.set(it.checklist_item_id, it);
   }
-  const missing = checklist.filter((c) => !answered.has(c.id));
+  const missing = checklist.filter((c) => c.required && !answered.has(c.id));
   if (missing.length) {
     throw new HttpError(422, `${missing.length} checklist item(s) still need an answer.`, { missing: missing.map((m) => m.id) });
   }
@@ -230,7 +248,9 @@ async function insertChildren(c: PoolClient, id: string, input: SubmitInput, che
   const answers = new Map(input.items.map((i) => [i.checklist_item_id, i]));
   const itemIds = new Map<number, number>();
   for (const ci of checklist) {
-    const a = answers.get(ci.id)!;
+    // Only what the phone answered: retired items it didn't show and items added after it loaded the form are skipped.
+    const a = answers.get(ci.id);
+    if (!a) continue;
     const r = await c.query(
       `INSERT INTO inspection_items (inspection_id, checklist_item_id, section, label_snapshot, result, note)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
@@ -339,10 +359,9 @@ export async function loadInspection(id: string) {
             (SELECT r.service_log_id FROM service_log_repairs r
               WHERE r.inspection_item_id = ii.id AND r.active) AS service_log_id
        FROM inspection_items ii
-       LEFT JOIN checklist_items ci ON ci.id = ii.checklist_item_id
        LEFT JOIN users ru ON ru.id = ii.resolved_by
       WHERE ii.inspection_id = $1
-      ORDER BY ii.section, ci.sort_order NULLS LAST, ii.id`,
+      ORDER BY ii.section, ii.id`, // saved in the order the form showed them, so reordering the checklist never reshuffles old ones
     [id],
   );
   const damage = await q(

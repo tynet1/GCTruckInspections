@@ -1,10 +1,11 @@
-// Admin: users & PINs, trucks (with trailer type and diagrams), branding, and deleted inspections (to restore).
+// Admin: users & PINs, trucks (with trailer type and diagrams), the inspection checklist, branding, and deleted
+// inspections (to restore).
 import { api } from "../api.js";
 import { brandVars, rememberBranding } from "../brand.js";
 import { errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, modal, shrinkImage, toast, vehicleInfo } from "../util.js";
 
-const TABS = { users: "Users & PINs", trucks: "Trucks", branding: "Branding", deleted: "Deleted inspections" };
+const TABS = { users: "Users & PINs", trucks: "Trucks", checklist: "Checklist", branding: "Branding", deleted: "Deleted inspections" };
 const ROLE_LABELS = {
   crew: "crew (inspections)",
   shop: "shop (maintenance log)",
@@ -21,12 +22,118 @@ export async function render(app, tab = "users", editId = null) {
     <div id="adm"><div class="empty">Loading…</div></div>`;
   try {
     if (tab === "trucks") await trucksTab(nav, editId);
+    else if (tab === "checklist") await checklistTab(nav);
     else if (tab === "branding") await brandingTab(nav);
     else if (tab === "deleted") await deletedTab(nav);
     else await usersTab(nav);
   } catch (e) {
     if (!stale(nav)) $("#adm").innerHTML = errorHtml(e);
   }
+}
+
+// ---------- Checklist ----------
+
+const CHANGE_WORDS = { added: "Added", renamed: "Reworded", moved: "Moved", retired: "Retired", restored: "Restored" };
+
+/** The inspection checklist: add, reword, reorder, retire and restore items. Changes apply to new inspections only. */
+async function checklistTab(nav) {
+  const data = await api("/admin/checklist");
+  if (stale(nav)) return;
+  const reload = () => checklistTab(nav);
+  const title = Object.fromEntries(data.sections.map((s) => [s.key, s.title]));
+  const box = $("#adm");
+  let h = `<h2 style="margin:16px 4px 4px">Inspection checklist</h2>
+    <p class="small muted" style="margin:0 4px 6px">Changes apply to new inspections. Submitted inspections keep the items and
+      wording they had, and a form already open on a phone still sends without the items added after it was opened.</p>`;
+  for (const s of data.sections) {
+    const live = data.items.filter((it) => it.section === s.key && it.active);
+    const retired = data.items.filter((it) => it.section === s.key && !it.active);
+    h += `<div class="h2row"><h2>${esc(s.title)} (${live.length})</h2><button class="link" data-add="${s.key}">+ Add item</button></div>
+      <div class="card list">${live.length ? live.map((it, n) => `<div class="item ckrow">
+          <span class="grow"><b>${n + 1}.</b> ${esc(it.label)}${it.answered ? "" : ` <span class="pill grey">New</span>`}</span>
+          <span class="row" style="flex-wrap:nowrap;gap:6px">
+            <button class="secondary mv" data-move="up" data-id="${it.id}" aria-label="Move up"${n === 0 ? " disabled" : ""}>↑</button>
+            <button class="secondary mv" data-move="down" data-id="${it.id}" aria-label="Move down"${n === live.length - 1 ? " disabled" : ""}>↓</button>
+            <button class="secondary" data-edit="${it.id}">Edit</button></span></div>`).join("")
+        : `<div class="empty">No items. This section is skipped on the form.</div>`}
+        ${retired.length ? `<details class="onfile"><summary>Retired (${retired.length})</summary>${retired.map((it) => `<div class="item ckrow">
+            <span class="grow muted">${esc(it.label)}</span><button class="secondary" data-restore="${it.id}">Restore</button></div>`).join("")}</details>` : ""}
+      </div>`;
+  }
+  if (data.changes.length) {
+    h += `<details class="onfile" style="margin:6px 4px"><summary>Recent changes (${data.changes.length})</summary><ul class="small" style="padding-left:18px;margin:0 0 12px">${
+      data.changes.map((c) => `<li>${fmtDate(c.changed_at)} · ${esc(c.changed_by_name)} · ${CHANGE_WORDS[c.action] || esc(c.action)}
+        ${c.action === "renamed" ? `“${esc(c.old_label)}” → “${esc(c.new_label)}”` : `“${esc(c.new_label || c.old_label)}”`}
+        <span class="muted">(${esc(title[c.section] || c.section)})</span></li>`).join("")}</ul></details>`;
+  }
+  box.innerHTML = h;
+
+  const run = async (b, fn) => {
+    b.disabled = true;
+    try { await fn(); } catch (e) { toast(e.status === 0 ? "No signal, so nothing changed." : e.message, 4000); }
+    if (!stale(nav)) reload();
+  };
+  box.querySelectorAll("[data-move]").forEach((b) => (b.onclick = () => run(b, () =>
+    api(`/admin/checklist/${b.dataset.id}/move`, { method: "POST", body: { direction: b.dataset.move } }))));
+  box.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = () => run(b, async () => {
+    await api(`/admin/checklist/${b.dataset.restore}/restore`, { method: "POST", body: {} });
+    toast("Restored to the end of its section ✓");
+  })));
+  box.querySelectorAll("[data-add]").forEach((b) => (b.onclick = async () => {
+    if (await checklistItemEditor(null, b.dataset.add, data.sections) && !stale(nav)) reload();
+  }));
+  box.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = async () => {
+    const it = data.items.find((x) => String(x.id) === b.dataset.edit);
+    if (await checklistItemEditor(it, it.section, data.sections) && !stale(nav)) reload();
+  }));
+}
+
+/** Add an item (item null) or reword / retire one. Resolves true when something changed. */
+function checklistItemEditor(item, section, sections) {
+  return new Promise((resolve) => {
+    const m = modal(`<h3>${item ? "Edit checklist item" : "Add checklist item"}</h3>
+      ${item ? `<p class="small muted" style="margin-top:-8px">${esc(sections.find((s) => s.key === section)?.title)} · answered on
+        ${item.answered} inspection${item.answered === 1 ? "" : "s"}. Those keep the old wording.</p>`
+        : `<label class="f" for="ck-sec">Section</label><select class="t" id="ck-sec">${sections.map((s) =>
+          `<option value="${s.key}"${s.key === section ? " selected" : ""}>${esc(s.title)}</option>`).join("")}</select>`}
+      <label class="f" for="ck-label">Item</label>
+      <input class="t" id="ck-label" maxlength="100" value="${esc(item?.label || "")}" placeholder="e.g. Fire extinguisher charged and tagged">
+      <div id="ck-err"></div>
+      <div class="row" style="justify-content:space-between;margin-top:14px">
+        ${item ? `<button class="secondary danger" data-retire>Retire</button>` : "<span></span>"}
+        <span class="row"><button class="secondary" data-c>Cancel</button><button class="primary" data-y>${item ? "Save" : "Add"}</button></span></div>`);
+    const input = m.querySelector("#ck-label");
+    input.focus();
+    const err = (msg) => { m.querySelector("#ck-err").innerHTML = `<div class="banner err">${esc(msg)}</div>`; };
+    const done = (changed) => { m.remove(); resolve(changed); };
+    m.querySelector("[data-c]").onclick = () => done(false);
+    m.querySelector("[data-y]").onclick = async (e) => {
+      const label = input.value.trim();
+      if (!label) return err("Type the checklist item.");
+      if (item && label === item.label) return done(false);
+      e.target.disabled = true;
+      try {
+        if (item) await api(`/admin/checklist/${item.id}`, { method: "PATCH", body: { label } });
+        else await api("/admin/checklist", { method: "POST", body: { section: m.querySelector("#ck-sec").value, label } });
+        toast(item ? "Saved ✓" : "Added at the end of the section ✓");
+        done(true);
+      } catch (ex) {
+        e.target.disabled = false;
+        err(ex.status === 0 ? "No signal, so nothing changed." : ex.message);
+      }
+    };
+    const rt = m.querySelector("[data-retire]");
+    if (rt) rt.onclick = async () => {
+      if (!(await confirmBox(`Retire “${item.label}”? It comes off the form for new inspections. Inspections that already have it keep it, and you can restore it later.`, "Retire", { danger: true }))) return;
+      try {
+        await api(`/admin/checklist/${item.id}/retire`, { method: "POST", body: {} });
+        toast("Retired ✓");
+        done(true);
+      } catch (ex) {
+        err(ex.status === 0 ? "No signal, so nothing changed." : ex.message);
+      }
+    };
+  });
 }
 
 // ---------- Deleted inspections ----------

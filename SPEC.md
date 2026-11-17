@@ -133,6 +133,8 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
   Orphan-photo cleanup skips photos attached to an entry.
 - Uploads pause (the phone keeps the photos and retries) before the disk the database lives on fills up (009).
 - Repair tickets (010) can't be deleted or changed, only voided once with a reason; the repairs on a ticket never change.
+- Checklist items (011) are retired, never deleted, and every checklist change is kept; editing the checklist never
+  changes a submitted inspection or bounces one that's being filled in.
 
 ## 5. Business rules
 
@@ -216,7 +218,14 @@ GET  /repair-tickets/:id/pdf[?inline=1]
 POST /repair-tickets/:id/void {reason}
 GET  /vehicles/:id/repair-tickets    -> the truck's tickets with fixed counts
 GET  /repair-tickets/sent-to         -> recent "Sent to" names
-admin CRUD: /vehicles, /trailers, /diagrams, /users, /checklist-items
+admin CRUD: /vehicles, /trailers, /diagrams, /users
+Checklist editor (built), admin only:
+GET  /admin/checklist                -> {sections, items (with how often each was answered), changes}
+POST /admin/checklist {section, label}
+PATCH /admin/checklist/:id {label}
+POST /admin/checklist/:id/move {direction: "up" | "down"}
+POST /admin/checklist/:id/retire, /restore
+GET  /form-config now also returns as_of; the phone sends it back as checklist_as_of with the inspection.
 
 Maintenance log (built):
 GET  /service-config                -> {categories}                          shop, supervisor, admin
@@ -294,8 +303,17 @@ POST /service-logs/:id/void         {reason}                                    
      - **Trailers** are their own numbered assets. They move between trucks, but not often: each trailer is on one truck
        at a time and can be reassigned, with the history kept.
    - **Batch PDF export as separate PDFs (built, see §6)** and the **repairs board (built, see §4 item 6)**.
-     **CSV export (built, see §6).** Still to do: checklist editor. **Admin only**, and changes apply to new inspections
-     only; submitted inspections keep the items they had (Tyler, 2026-11-17).
+     **CSV export (built, see §6).**
+   - **Checklist editor (built 2026-11-17, migration 011).** Admin → Checklist (admin only, Tyler 2026-11-17) lists the
+     Exterior, Interior and Trailer & crew items in form order. An admin adds an item (at the end of its section), rewords
+     one, moves it up or down, retires it (off the form for new inspections) or restores it (back at the end). No two
+     items in use in a section may read the same. Every change is kept with who and when ("Recent changes"), and items are
+     never deleted. Changes apply to new inspections only: submitted inspections keep the items, wording and order they
+     had (detail screen and PDF), because each answer stores its wording and is listed in the order it was saved.
+     A form already open on a phone keeps working: the form sends when it loaded the checklist, so the server doesn't
+     demand items added after that and still accepts answers to items retired since. A draft that doesn't say (made
+     before this) needs every current item, as before. The original items can never be skipped this way (a claimed
+     checklist time counts back at most 90 days). Separate checklists for yards and equipment come with those features.
 3. **Code review and hardening:** full code review; review and optimize performance while keeping stability; a burn-in test
    (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
 4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins.

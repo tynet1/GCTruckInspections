@@ -2,54 +2,78 @@
 
 Phone-first web app that replaces the paper Truck Inspection Sheet: crews sign in with a PIN, fill the same
 checklist on their phone, drop numbered damage pins on the truck diagram, add photos and sign with a finger.
-Supervisors sign off and export a PDF that looks like the paper form. Works with weak or no signal: drafts stay
-on the phone and upload when signal returns.
+Supervisors sign off and export a PDF that looks like the paper form. The shop keeps a maintenance log, open repairs
+are tracked across the fleet, repair tickets go out as PDFs, and everything exports to CSV. Works with weak or no
+signal: drafts stay on the phone and upload when signal returns.
 
-- **Spec:** [SPEC.md](SPEC.md) (source of truth) · **Deploy:** [docs/DEPLOY.md](docs/DEPLOY.md)
+- **Spec:** [SPEC.md](SPEC.md) (source of truth, including the roadmap and Tyler's answers) · **Deploy:** [docs/DEPLOY.md](docs/DEPLOY.md)
 - **Vehicle data questions:** [seed/DATA-ISSUES.md](seed/DATA-ISSUES.md)
+- **Live:** a DigitalOcean droplet behind Cloudflare (since 2026-11-12). Updates: [docs/DEPLOY.md §6](docs/DEPLOY.md#6-updating).
 
-## What's in phase 1 (MVP)
+## Phase 1 (MVP): done
 
 | Area | Status |
 |---|---|
-| Sign in: crew name + PIN (30-day session), supervisor/admin email + password, lockout after 5 wrong tries (longer if it keeps happening that day), wrong tries capped per network | done |
+| Sign in: crew name + PIN (30-day session), supervisor/admin email + password | done |
 | Home: search trucks; badges for last inspection (amber over 35 days), open repairs, draft, registration expired | done |
-| Truck page: start/resume, open repairs from all inspections, history | done |
+| Truck page: start/resume, open repairs from all inspections, damage on file, maintenance, repair tickets, history | done |
 | Inspection form: same order as paper; damage pins, with all damage already on file shown as grey dots and listed; photos on pins and repairs; trailer section; finger signature; save bar lists what's missing | done |
 | Offline: draft autosaves to the phone (IndexedDB); uploads retry with backoff; "Saved on phone, not yet uploaded"; duplicate-proof submit (`client_id`) | done |
 | Inspection detail: repairs first, pins, photo gallery, full checklist, supervisor sign-off, resolve repairs | done |
 | PDF export matching the paper form (page 1 sheet, page 2 trailer + signatures, photo pages) | done |
-| Admin: users and PINs, trucks (every header field, trailer type, diagram), branding (name, color, logo) | done |
-| Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | running on a DigitalOcean droplet since 2026-11-12 (Tyler's PC before that); backup and restore tested |
+| Admin: users and PINs, trucks (every header field, trailer type, diagram), inspection checklist, branding (name, color, logo), deleted inspections | done |
+| Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | running on the droplet; backup and restore tested |
 
-## Phase 2 (in progress)
+## Phase 2
 
 | Area | Status |
 |---|---|
 | Maintenance log for the shop manager (`shop` role): log work per truck with mileage, parts, cost, photos; close inspection repairs; next-due mileage/date; edit history; void instead of delete; works offline | done |
-| Fleet management (lease details, statuses, lease-return prep, trailers as assets) | waiting on scope answers (SPEC §9) |
-| Batch PDF export: tick inspections, get one PDF each (zip, or share as separate files) | done |
 | Maintenance log: several types of work on one entry (multi-select, next-due per type) | done |
 | Mark damage repaired (photo of the fix required; Log fix or supervisor; drops off the form's grey dots, kept on the truck page) | done |
 | Archive or delete inspections (delete = recoverable forever, admin only, reason required); database refuses to erase inspections | done |
-| Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve | done |
+| Batch PDF export: tick inspections, get one PDF each (zip, or share as separate files) | done |
+| Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve / Ticket | done |
+| CSV export: inspections, repairs, maintenance log, trucks, with truck/date filters (Download CSV in the menu) | done |
+| Checklist editor (Admin → Checklist): add, reword, reorder, retire and restore items, with a change history. New inspections only; submitted ones keep their items and wording, and a form already open on a phone still sends | done |
+| Fleet management: status (in service, in the shop, on hold, preparing for return, returned, sold), trailers that move between trucks, a reminders list for supervisors | scope answered 2026-11-17; lease details wait until Tyler has them |
+
+## Wishlist (SPEC §9 item 5)
+
+| Area | Status |
+|---|---|
 | Registration expiration: supervisors update it from the form, sign-off or truck page; full history; PDFs keep the date on file | done |
-| CSV export: inspections, repairs, maintenance log, trucks, with truck/date filters | done |
-| PDF repair ticket: pick repairs on a truck, numbered PDF to print/share/email, Log fix from it, void with a reason | done |
-| Checklist editor | not started |
+| PDF repair ticket: tick repairs on a truck, numbered ticket (RT-0001) to print/share/email, Log fix from it, void with a reason | done |
+| Yard inspections (after the 11/13/26 yard fire): daily at AZ by a supervisor, fire-focused checklist, failed items notify supervisors in the app | next |
+| Equipment inspections: the ~8 tagged pieces of yard-care equipment on each trailer, periodic, with maintenance like trucks | after yard |
+| Incident reports: vehicle incidents filed by supervisors; damage goes on the truck's record | waiting on a sample form |
+
+Build order and every answered question are in SPEC §9. Phase 3 after that: full code review, performance and a burn-in test.
+
+## Security and data safety
+
+- Nothing is hard-deleted: inspections, maintenance entries, damage repairs, registration history, repair tickets and
+  checklist items are kept for good (retire, void or archive instead), and the database refuses deletes. See SPEC §4a.
+- Sign-in: lockout after 5 wrong tries (longer if it keeps happening that day), 20 wrong tries an hour per network,
+  real client addresses behind Caddy and Cloudflare. Photo uploads: 1 GB per person a day, and they pause before the
+  disk fills. HSTS over HTTPS. Details in SPEC §3.
 
 ## Layout
 
 ```
 src/                 Fastify API (TypeScript, run directly by Node 24, no build step)
-  routes/            auth, vehicles, photos, inspections, admin
+  routes/            auth, vehicles, photos, inspections, service (maintenance), tickets, export (CSV),
+                     checklist (editor), admin, branding
   pdf.ts             paper-form HTML template -> PDF via headless Chromium
+  ticket-pdf.ts      repair ticket PDF
+  csv.ts             CSV files for Excel (formula-safe)
   storage.ts         photo/signature storage (local disk today; S3/Azure later behind the same interface)
 public/              the web app (plain HTML/CSS/JS modules, no framework), service worker, diagrams
-db/migrations/       numbered SQL migrations, applied automatically on start
+  js/views/          one module per screen (home, truck, form, detail, repairs, tickets, csv, export, admin…)
+db/migrations/       numbered SQL migrations, applied automatically on start (never edit one that has shipped)
 seed/vehicles.csv    trucks added on start if missing (never overwrites edits made in Admin)
 scripts/             backup.sh (nightly, run by the backup container), restore.sh
-test/                API tests against a real Postgres
+test/                API tests against a real Postgres, plus browser-file and CSV checks
 prototype/, reference/   the approved claude.ai prototype and the original paper forms
 ```
 
@@ -62,7 +86,7 @@ cp .env.example .env    # then edit passwords, admin email, site address
 docker compose up -d --build
 ```
 
-## Develop locally (no Docker)
+## Develop locally
 
 Needs Node 24+ and a Postgres 16 database.
 
@@ -77,7 +101,14 @@ Create `.env.local` (gitignored) with at least `DATABASE_URL`, `ADMIN_EMAIL`, `A
 npm run dev                            # http://localhost:3000, migrations run on start
 npm run user -- add --name "Test Crew" --role crew --pin 1234
 npm run typecheck
-TEST_DATABASE_URL=postgres://user:pass@localhost:5432/gc_test npm test   # wipes that database
+```
+
+The tests need a throwaway Postgres; they wipe it. With Docker:
+
+```bash
+docker run -d --name gc-unit-pg -e POSTGRES_USER=gc -e POSTGRES_PASSWORD=gctest -e POSTGRES_DB=gc_test -p 127.0.0.1:54330:5432 postgres:16-alpine
+TEST_DATABASE_URL=postgres://gc:gctest@localhost:54330/gc_test npm test
+docker rm -f -v gc-unit-pg
 ```
 
 Changes under `public/` need a server restart so the service worker picks up the new version.

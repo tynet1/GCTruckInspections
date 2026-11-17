@@ -1671,4 +1671,123 @@ if (!url) {
       assert.equal(Number((await one(`SELECT count(*) AS n FROM repair_ticket_items WHERE ticket_id = $1`, [t1])).n), 2);
     });
   });
+
+  describe("checklist editor", () => {
+    let adminCookie = "";
+    type Ck = { id: number; section: string; label: string; active: boolean; answered: number };
+    const editor = async () => (await inject("GET", "/admin/checklist", { cookie: adminCookie })).json() as
+      { sections: { key: string }[]; items: Ck[]; changes: { action: string; old_label: string; new_label: string }[] };
+    const formItems = async () => (await inject("GET", "/form-config", { cookie: crewCookie })).json() as
+      { checklist: { id: number; section: string; label: string }[]; as_of: string };
+    const add = (section: string, label: string) => inject("POST", "/admin/checklist", { cookie: adminCookie, body: { section, label } });
+    const act = (id: number, what: string, body: unknown = {}) =>
+      inject("POST", `/admin/checklist/${id}/${what}`, { cookie: adminCookie, body });
+    /** A submit body answering exactly these items, all OK. */
+    const bodyFor = (items: { id: number; section: string }[], over: Record<string, unknown> = {}) => submitBody({
+      inspection_date: "2026-11-16", mileage: 61000, damage: [], ...over,
+      items: items.filter((c) => c.section !== "trailer").map((c) => ({ checklist_item_id: c.id, result: "ok" })),
+    });
+
+    before(async () => {
+      const res = await app.inject({
+        method: "POST", url: "/api/auth/login", remoteAddress: "172.18.0.5",
+        headers: { ...H, "x-forwarded-for": "203.0.113.220" }, payload: { email: "admin@test.local", password: "admin-password-1" },
+      });
+      assert.equal(res.statusCode, 200);
+      adminCookie = cookieOf(res);
+    });
+
+    test("only admins can see or change it", async () => {
+      assert.equal((await inject("GET", "/admin/checklist", { cookie: supCookie })).statusCode, 403);
+      assert.equal((await inject("GET", "/admin/checklist", { cookie: crewCookie })).statusCode, 403);
+      assert.equal((await add("exterior", "Nope")).statusCode, 201, "an admin can");
+      assert.equal((await inject("POST", "/admin/checklist", { cookie: supCookie, body: { section: "exterior", label: "X" } })).statusCode, 403);
+      const e = await editor();
+      assert.deepEqual(e.sections.map((s) => s.key), ["exterior", "interior", "trailer"]);
+      const nope = e.items.find((i) => i.label === "Nope")!;
+      assert.equal((await act(nope.id, "retire")).statusCode, 200);
+    });
+
+    test("add, reword, reorder, retire and restore, each kept in the history; nothing can be deleted", async () => {
+      const a = await add("exterior", "  Fire   extinguisher charged ");
+      assert.equal(a.statusCode, 201, a.body);
+      const fire = a.json();
+      assert.equal(fire.label, "Fire extinguisher charged", "extra spaces are tidied");
+      let form = await formItems();
+      const ext = form.checklist.filter((c) => c.section === "exterior");
+      assert.equal(ext.at(-1)!.id, fire.id, "a new item goes at the end of its section");
+      assert.equal((await add("exterior", "FIRE EXTINGUISHER CHARGED")).statusCode, 409, "no duplicates in a section");
+      assert.equal((await add("interior", "Fire extinguisher charged")).statusCode, 201, "the same words can be in another section");
+      assert.equal((await add("exterior", "  ")).statusCode, 400);
+      assert.equal((await add("roof", "Antenna")).statusCode, 400);
+
+      assert.equal((await inject("PATCH", `/admin/checklist/${fire.id}`, { cookie: adminCookie, body: { label: "Fire extinguisher charged and tagged" } })).statusCode, 200);
+      assert.equal((await act(fire.id, "move", { direction: "up" })).json().moved, true);
+      form = await formItems();
+      const ext2 = form.checklist.filter((c) => c.section === "exterior");
+      assert.equal(ext2.at(-2)!.label, "Fire extinguisher charged and tagged", "moved up one place");
+      assert.equal((await act(ext2[0].id, "move", { direction: "up" })).json().moved, false, "the first can't go higher");
+      assert.equal((await act(fire.id, "move", { direction: "sideways" })).statusCode, 400);
+
+      assert.equal((await act(fire.id, "retire")).statusCode, 200);
+      assert.equal((await act(fire.id, "retire")).statusCode, 409);
+      assert.ok(!(await formItems()).checklist.some((c) => c.id === fire.id), "a retired item is off the form");
+      assert.equal((await act(fire.id, "restore")).statusCode, 200);
+      assert.equal((await formItems()).checklist.filter((c) => c.section === "exterior").at(-1)!.id, fire.id, "restored at the end");
+
+      const e = await editor();
+      assert.deepEqual(e.changes.slice(0, 5).map((c) => c.action), ["restored", "retired", "moved", "renamed", "added"]);
+      assert.deepEqual([e.changes[3].old_label, e.changes[3].new_label], ["Fire extinguisher charged", "Fire extinguisher charged and tagged"]);
+      await assert.rejects(q(`DELETE FROM checklist_items WHERE id = $1`, [fire.id]));
+      await assert.rejects(q(`DELETE FROM checklist_changes`));
+      await assert.rejects(q(`UPDATE checklist_changes SET new_label = 'x'`));
+    });
+
+    test("a form opened before a change still sends; the original items can't be skipped", async () => {
+      const before = await formItems();
+      const visible = before.checklist.filter((c) => c.section !== "trailer");
+      const added = (await add("exterior", "Added while a form was open")).json();
+      const dropped = visible.find((c) => c.section === "interior")!;
+      assert.equal((await act(dropped.id, "retire")).statusCode, 200);
+
+      // The phone sends the checklist it showed: no answer for the new item, an answer for the one retired meanwhile.
+      const ok = await inject("POST", "/inspections", { cookie: crewCookie, body: bodyFor(visible, { checklist_as_of: before.as_of }) });
+      assert.equal(ok.statusCode, 201, ok.body);
+      const saved = await q(`SELECT checklist_item_id FROM inspection_items WHERE inspection_id = $1`, [ok.json().id]);
+      const ids = new Set(saved.map((r: { checklist_item_id: number }) => r.checklist_item_id));
+      assert.ok(ids.has(dropped.id) && !ids.has(added.id));
+
+      // Without saying which checklist it showed (an older draft), every current item is needed.
+      const old = await inject("POST", "/inspections", { cookie: crewCookie, body: bodyFor(visible) });
+      assert.equal(old.statusCode, 422);
+      assert.deepEqual(old.json().details.missing, [added.id]);
+      // Claiming a very old checklist doesn't get out of answering the original items.
+      const sneaky = await inject("POST", "/inspections", { cookie: crewCookie, body: bodyFor([], { checklist_as_of: "1999-01-01T00:00:00Z" }) });
+      assert.equal(sneaky.statusCode, 422);
+      assert.ok(sneaky.json().details.missing.length >= 30);
+      // A current form answers the new item and leaves out the retired one.
+      const now = await formItems();
+      const fresh = await inject("POST", "/inspections", { cookie: crewCookie, body: bodyFor(now.checklist, { checklist_as_of: now.as_of }) });
+      assert.equal(fresh.statusCode, 201, fresh.body);
+      assert.equal((await act(dropped.id, "restore")).statusCode, 200);
+      assert.equal((await act(added.id, "retire")).statusCode, 200);
+    });
+
+    test("old inspections keep their wording and order after items are reworded or moved", async () => {
+      const ins = await one(`SELECT id FROM inspections ORDER BY created_at LIMIT 1`);
+      const before = (await inject("GET", `/inspections/${ins.id}`, { cookie: supCookie })).json().items
+        .map((i: { label: string }) => i.label);
+      const first = (await formItems()).checklist.find((c) => c.section === "exterior")!;
+      await inject("PATCH", `/admin/checklist/${first.id}`, { cookie: adminCookie, body: { label: "Engine oil (dipstick)" } });
+      await act(first.id, "move", { direction: "down" });
+      const after = (await inject("GET", `/inspections/${ins.id}`, { cookie: supCookie })).json().items
+        .map((i: { label: string }) => i.label);
+      assert.deepEqual(after, before);
+      const html = await pdfHtmlFor(ins.id);
+      assert.ok(!html.includes("Engine oil (dipstick)"), "the PDF keeps the old wording");
+      // Put it back as it was.
+      await act(first.id, "move", { direction: "up" });
+      await inject("PATCH", `/admin/checklist/${first.id}`, { cookie: adminCookie, body: { label: first.label } });
+    });
+  });
 }

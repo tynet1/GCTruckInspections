@@ -27,7 +27,7 @@ const routes = [
   { re: /^#\/export(?:\?truck=(\d+))?$/, view: exportView, role: "supervisor" },
   { re: /^#\/csv(?:\?([\w=&-]*))?$/, view: csvView, allow: () => can.seeService() },
   { re: /^#\/repairs(?:\?truck=(\d+))?$/, view: repairsBoard, allow: () => can.seeService() },
-  { re: /^#\/admin(?:\/(users|trucks|branding|deleted))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
+  { re: /^#\/admin(?:\/(users|trucks|checklist|branding|deleted))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
 
 let current = null;
@@ -97,7 +97,7 @@ export function openMenu() {
       ${can.seeService() ? `<a class="secondary" href="#/repairs" data-close>Repairs board</a>` : ""}
       ${atLeast("supervisor") ? `<a class="secondary" href="#/export" data-close>Export PDFs</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/csv" data-close>Download CSV (spreadsheet)</a>` : ""}
-      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks, branding &amp; deleted</a>` : ""}
+      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks, checklist, branding &amp; deleted</a>` : ""}
       <button class="secondary danger" id="mSignOut">Sign out</button>
       <button class="secondary" data-close>Close</button>
     </div>`);
