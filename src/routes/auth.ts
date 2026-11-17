@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { AddressFailures, beginAttempt, endSession, PIN_RE, recordFailure, requireUser, startSession, verifySecret } from "../auth.ts";
+import { AddressFailures, beginAttempt, clientAddress, endSession, PIN_RE, recordFailure, requireUser, startSession, verifySecret } from "../auth.ts";
 import type { Role } from "../auth.ts";
 import { one, q } from "../db.ts";
 import { bad, HttpError, obj } from "../http.ts";
@@ -20,17 +20,18 @@ export default async function authRoutes(app: FastifyInstance) {
 
   /** Check a PIN or password with the account lockout and the per-network limit around it. */
   async function check(req: FastifyRequest, u: LoginRow | undefined, secret: string, stored: string | null): Promise<boolean> {
-    network.check(req.ip);
+    const ip = clientAddress(req);
+    network.check(ip);
     const attempt = u ? await beginAttempt(u.id) : 0;
     // Takes the same time when there's no such account or it has no PIN/password.
     if ((await verifySecret(secret, stored)) && u) {
-      network.forgive(req.ip, u.id);
+      network.forgive(ip, u.id);
       return true;
     }
-    if (network.record(req.ip, u?.id ?? 0)) req.log.warn({ ip: req.ip }, "sign-in: too many wrong tries from one network");
+    if (network.record(ip, u?.id ?? 0)) req.log.warn({ ip }, "sign-in: too many wrong tries from one network");
     if (u) {
       const mins = await recordFailure(u.id, attempt);
-      if (mins) req.log.warn({ user: u.id, ip: req.ip, minutes: mins }, "sign-in: account locked after wrong tries");
+      if (mins) req.log.warn({ user: u.id, ip, minutes: mins }, "sign-in: account locked after wrong tries");
     }
     return false;
   }

@@ -1,4 +1,5 @@
 import { createHash, randomBytes, scrypt as scryptCb, timingSafeEqual } from "node:crypto";
+import { BlockList, isIP } from "node:net";
 import { promisify } from "node:util";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { config } from "./config.ts";
@@ -107,6 +108,36 @@ export async function recordFailure(userId: number, attempt: number): Promise<nu
     [userId, config.lockout.minutes, config.lockout.maxMinutes],
   );
   return r?.mins ?? null;
+}
+
+// ---------- Client address ----------
+
+// Cloudflare's published ranges (cloudflare.com/ips-v4 and /ips-v6, checked 2026-11-17).
+const CLOUDFLARE_RANGES = [
+  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
+  "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+  "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+  "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+];
+const cloudflare = new BlockList();
+for (const r of CLOUDFLARE_RANGES) {
+  const [net, bits] = r.split("/");
+  cloudflare.addSubnet(net, Number(bits), net.includes(":") ? "ipv6" : "ipv4");
+}
+
+/**
+ * The phone's address, for the sign-in limits. req.ip is the first address past our own proxies (config.trustProxy).
+ * When that is Cloudflare's (the domain is proxied through Cloudflare), the phone's address is the CF-Connecting-IP
+ * header Cloudflare sets. The header is ignored from anyone else, so going around Cloudflare straight to the droplet
+ * can't fake it.
+ */
+export function clientAddress(req: FastifyRequest): string {
+  const ip = req.ip.replace(/^::ffff:(?=\d+\.)/i, "");
+  const family = isIP(ip);
+  const header = req.headers["cf-connecting-ip"];
+  const claimed = typeof header === "string" ? header.trim() : "";
+  if (family && isIP(claimed) && cloudflare.check(ip, family === 6 ? "ipv6" : "ipv4")) return claimed;
+  return ip;
 }
 
 // ---------- Wrong sign-ins per network ----------

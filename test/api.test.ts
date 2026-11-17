@@ -1253,6 +1253,18 @@ if (!url) {
       assert.equal((await pinFrom("203.0.113.8", 999999, "0000")).statusCode, 401, "another address isn't affected");
     });
 
+    test("through Cloudflare's proxy the limit counts each phone (CF-Connecting-IP), not Cloudflare's address", async () => {
+      // Caddy hands the app the Cloudflare edge's address; Cloudflare puts the phone's in CF-Connecting-IP.
+      const edge = "172.69.74.222";
+      for (let i = 0; i < 15; i++) {
+        assert.equal((await pinFrom(edge, 999999, "0000", { "cf-connecting-ip": "198.51.100.50" })).statusCode, 401);
+      }
+      assert.equal((await pinFrom(edge, 999999, "0000", { "cf-connecting-ip": "198.51.100.50" })).statusCode, 429);
+      assert.equal((await pinFrom(edge, 999999, "0000", { "cf-connecting-ip": "198.51.100.51" })).statusCode, 401,
+        "another phone behind the same Cloudflare edge isn't affected");
+      assert.equal((await pinFrom("2606:4700:10::1", 999999, "0000", { "cf-connecting-ip": "198.51.100.52" })).statusCode, 401);
+    });
+
     test("one network gets a set number of wrong tries across all accounts; your own typos stop counting once you get in", async () => {
       const crew = await one(`SELECT id FROM users WHERE name = 'Casey Crew'`);
       const before = limits.addressMaxFailures;

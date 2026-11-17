@@ -49,7 +49,9 @@ The pilot can start on Wi-Fi at the yard if needed.
 (Caddy on 80/443; HTTPS needs `SITE_ADDRESS` set to a domain). The PC copy no longer hosts it.
 Hardening for the open internet (done 2026-11-17, migration 009):
 - The app trusts forwarded headers only from its own proxies (private addresses), so the sign-in limits count the
-  phone's real address. A client-set `CF-Connecting-IP` is ignored.
+  phone's real address. The domain is proxied through Cloudflare, so the phone's address is Cloudflare's
+  `CF-Connecting-IP`, used only when the connection really comes from Cloudflare's published ranges (listed in
+  `src/auth.ts`; recheck cloudflare.com/ips once a year). Someone going around Cloudflare straight to the droplet can't fake it.
 - Wrong sign-ins: an account still locks after 5 wrong tries in a row, for 15 minutes, doubling with each lockout that
   day (30, 60, 120, then 240 minutes). Tries sent all at once count too. One network gets 20 wrong tries an hour
   across all accounts; for IPv6 a network is its /64. A yard's crew share its Wi-Fi address, so a person's own typos

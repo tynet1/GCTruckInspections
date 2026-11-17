@@ -7,7 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import type { FastifyError, FastifyInstance } from "fastify";
-import { addressKey, loadSession } from "./auth.ts";
+import { addressKey, clientAddress, loadSession } from "./auth.ts";
 import { config } from "./config.ts";
 import { pool, q } from "./db.ts";
 import { HttpError } from "./http.ts";
@@ -61,9 +61,8 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(multipart);
   await app.register(rateLimit, {
     global: false,
-    // req.ip is the first address past our own proxies (see config.trustProxy). Never a client-set header such as
-    // CF-Connecting-IP: anyone can send that straight to the droplet.
-    keyGenerator: (req) => addressKey(req.ip),
+    // The phone's real address: CF-Connecting-IP only when the request really came through Cloudflare (clientAddress).
+    keyGenerator: (req) => addressKey(clientAddress(req)),
   });
 
   app.decorateRequest("user", null);

@@ -138,8 +138,8 @@ address refused for a while, so don't script rapid back-to-back `ssh` calls.
 
 ## Windows PC (Docker Desktop)
 
-No longer the host (the droplet is, since 2026-11-12). An old copy of the stack is still on the PC and starts whenever
-Docker Desktop does; `docker compose stop` in `C:CodeGCTruckInspections` stops it without deleting anything.
+No longer the host (the droplet is, since 2026-11-12). The old copy's containers are gone from the PC (checked
+2026-11-17), so starting Docker Desktop no longer starts it; its data volumes (`gc-inspections_*`) are still there.
 How it was set up on Tyler's PC (2026-11-11):
 
 - Needs WSL 2 (`wsl --install --no-distribution` in an admin PowerShell, then restart) and Docker Desktop.
@@ -167,4 +167,6 @@ How it was set up on Tyler's PC (2026-11-11):
 | "No admin account exists" in the logs | Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env`, then `docker compose up -d` |
 | PDF export fails | `docker compose logs app` around the time of the click; Chromium needs ~300 MB RAM free |
 | Phone says "Saved on phone, not yet uploaded" for a long time | Is the tunnel up? `docker compose --profile tunnel ps`; can the phone open the site at all? |
-| Someone is locked out | Admin → Users → set a new PIN (unlocks immediately), or wait 15 minutes |
+| Someone is locked out | Admin → Users → set a new PIN or password (unlocks immediately). Otherwise the lock lasts 15 minutes, doubling each time it happens again that day, up to 4 hours |
+| "Too many wrong sign-ins from this network" | 20 wrong tries in an hour from one address (e.g. the yard Wi-Fi). Wait it out, or sign in on cell data; `docker compose logs app | grep sign-in` shows the address |
+| Photos stay "waiting on this phone" | The daily photo limit (1 GB a person) or a nearly full disk (`df -h /`; uploads pause under 2 GB free). The phones keep the photos and retry |
