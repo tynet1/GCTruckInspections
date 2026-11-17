@@ -4,6 +4,7 @@ import { api } from "../api.js";
 import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, $$, esc, fmtDate, lightbox, vehicleInfo } from "../util.js";
 import { repairButtons, resolveRepair, SECTION_TITLES } from "./common.js";
+import { makeTicket, openTicket, ticketPills } from "./tickets.js";
 
 let view = { truck: "", order: "truck" };
 let list = [];
@@ -34,7 +35,7 @@ function item(r, showTruck) {
   const who = { canLog: can.logService(), canResolve: atLeast("supervisor") };
   return `<li><div class="spread" style="align-items:flex-start"><div class="grow">
       ${showTruck ? `<a href="#/truck/${r.vehicle_id}"><b>${esc(r.truck_code)}</b></a> · ` : ""}<b>${esc(r.label)}</b>
-      <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span> ${age(r.days_open)}
+      <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span> ${age(r.days_open)}${ticketPills(r)}
       ${r.note ? `<div>${esc(r.note)}</div>` : ""}
       <div class="small muted">${r.inspector_name ? `${esc(r.inspector_name)} · ` : ""}<a href="#/inspection/${esc(r.inspection_id)}">From ${
         fmtDate(r.inspection_date)} inspection</a></div>
@@ -73,7 +74,8 @@ function draw(app) {
       const rs = shown.filter((r) => r.vehicle_id === t.vehicle_id);
       h += `<div class="h2row"><h2><a href="#/truck/${t.vehicle_id}" style="color:inherit;display:inline-flex;align-items:center;min-height:44px;min-width:48px">${
         esc(t.truck_code)}</a> · ${rs.length}</h2>
-          <span class="small muted">${esc(vehicleInfo(t))}</span></div>
+          <span class="row" style="flex-wrap:nowrap"><span class="small muted">${esc(vehicleInfo(t))}</span>
+          <button class="link" data-ticket-truck="${t.vehicle_id}">Ticket</button></span></div>
         <div class="card"><ul class="repairlist">${rs.map((r) => item(r, false)).join("")}</ul></div>`;
     }
   }
@@ -82,6 +84,15 @@ function draw(app) {
   $("#rb-truck").onchange = (e) => { view.truck = e.target.value; draw(app); };
   $$("#rb-order [data-order]").forEach((b) => (b.onclick = () => { view.order = b.dataset.order; draw(app); }));
   app.querySelectorAll("[data-lb]").forEach((img) => (img.onclick = () => lightbox(img.src, img.dataset.cap)));
+  app.querySelectorAll("[data-ticket-truck]").forEach((b) => (b.onclick = async () => {
+    const rs = list.filter((r) => String(r.vehicle_id) === b.dataset.ticketTruck);
+    const truck = { id: Number(b.dataset.ticketTruck), truck_code: rs[0]?.truck_code };
+    const tid = await makeTicket(truck, rs);
+    if (!tid || stale(nav)) return;
+    try { list = await api("/repairs"); } catch { /* keep the old list */ }
+    if (!stale(nav)) draw(app);
+    openTicket(tid);
+  }));
   app.querySelectorAll("[data-resolve]").forEach((b) => (b.onclick = async () => {
     if (!(await resolveRepair(b.dataset.resolve, b.dataset.label)) || stale(nav)) return;
     try {

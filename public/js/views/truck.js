@@ -6,6 +6,7 @@ import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, fmtNum, lightbox, modal, shrinkImage, toast, uuid, vehicleInfo } from "../util.js";
 import { inspectionRow, repairButtons, resolveRepair, SECTION_TITLES, serviceRow } from "./common.js";
 import { regHistoryHtml, regValue, updateRegistration } from "./registration.js";
+import { makeTicket, openTicket, ticketPills, ticketsSection } from "./tickets.js";
 
 let showAllService = false;
 let showAllDamage = false;
@@ -16,13 +17,14 @@ export async function render(app, id) {
   if (id !== lastTruck) { showAllService = false; showAllDamage = false; lastTruck = id; }
   setHeader({ title: "Truck", back: "#/" });
   app.innerHTML = `<div class="empty">Loading…</div>`;
-  let data, draft, svc, svcDraft;
+  let data, draft, svc, svcDraft, tickets;
   try {
-    [data, draft, svc, svcDraft] = await Promise.all([
+    [data, draft, svc, svcDraft, tickets] = await Promise.all([
       api(`/vehicles/${id}`),
       getDraft(id),
       can.seeService() ? api(`/vehicles/${id}/service`).catch((e) => e) : null,
       getSvcDraft(`new-${id}`).catch(() => null),
+      can.seeService() ? api(`/vehicles/${id}/repair-tickets`).catch(() => []) : [],
     ]);
   } catch (e) {
     if (!stale(nav)) app.innerHTML = errorHtml(e);
@@ -56,11 +58,14 @@ export async function render(app, id) {
   }
 
   const who = { canLog: can.logService(), canResolve: atLeast("supervisor") };
-  h += `<h2>Open repairs (${openRepairs.length})</h2><div class="card">${openRepairs.length
-    ? `<ul class="repairlist">${openRepairs.map((r) => `<li><div class="spread"><div><b>${esc(r.label)}</b> <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span>
+  h += `${can.seeService() && openRepairs.length
+    ? `<div class="h2row"><h2>Open repairs (${openRepairs.length})</h2><button class="link" id="mkTicket">Make repair ticket</button></div>`
+    : `<h2>Open repairs (${openRepairs.length})</h2>`}<div class="card">${openRepairs.length
+    ? `<ul class="repairlist">${openRepairs.map((r) => `<li><div class="spread"><div><b>${esc(r.label)}</b> <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span>${ticketPills(r)}
         ${r.note ? `<div>${esc(r.note)}</div>` : ""}<a class="small" href="#/inspection/${esc(r.inspection_id)}">From ${fmtDate(r.inspection_date)} inspection</a></div>
         ${repairButtons(r, v.id, who)}</div></li>`).join("")}</ul>`
     : `<span class="muted">No open repairs.</span>`}</div>`;
+  h += ticketsSection(tickets || []);
   h += damageSection(v, data.damage || []);
   if (svc) h += serviceSection(v, svc, svcDraft);
   h += `${atLeast("supervisor") && history.length
@@ -94,6 +99,14 @@ export async function render(app, id) {
   };
   app.querySelectorAll("[data-resolve]").forEach((b) => (b.onclick = async () => {
     if (await resolveRepair(b.dataset.resolve, b.dataset.label)) render(app, id);
+  }));
+  const mk = $("#mkTicket");
+  if (mk) mk.onclick = async () => {
+    const tid = await makeTicket(v, openRepairs);
+    if (tid && !stale(nav)) { render(app, id); openTicket(tid); }
+  };
+  app.querySelectorAll("[data-ticket]").forEach((b) => (b.onclick = async () => {
+    if ((await openTicket(b.dataset.ticket)) && !stale(nav)) render(app, id);
   }));
   const ma = $("#svcMore");
   if (ma) ma.onclick = () => { showAllService = true; render(app, id); };

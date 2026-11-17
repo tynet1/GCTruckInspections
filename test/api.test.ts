@@ -1525,4 +1525,150 @@ if (!url) {
       assert.equal(az070["In service"], "Yes");
     });
   });
+
+  describe("repair tickets", () => {
+    let shopCookie = "";
+    let truckA = 0;
+    let truckB = 0;
+    const ids: Record<string, number> = {};
+    let t1 = 0;
+    let t2 = 0;
+    const make = (cookie: string, body: Record<string, unknown>) =>
+      inject("POST", "/repair-tickets", { cookie, body: { client_id: randomUUID(), vehicle_id: truckA, ...body } });
+
+    before(async () => {
+      const u = await one(`SELECT id FROM users WHERE name = 'Frank Shop'`);
+      const res = await app.inject({
+        method: "POST", url: "/api/auth/pin", remoteAddress: "172.18.0.5",
+        headers: { ...H, "x-forwarded-for": "203.0.113.210" }, payload: { user_id: u.id, pin: "1357" },
+      });
+      shopCookie = cookieOf(res);
+      truckA = (await one(`SELECT id FROM vehicles WHERE truck_code = 'AZ042'`)).id;
+      truckB = (await one(`SELECT id FROM vehicles WHERE truck_code = 'AZ047'`)).id;
+      const submit = async (truck: number, notes: string[], photo?: string) => {
+        const body = submitBody({ vehicle_id: truck, inspection_date: "2026-11-12", mileage: 81234, damage: [] });
+        body.items = (body.items as { checklist_item_id: number; result: string; note?: string }[]).map((it, n) =>
+          n < notes.length ? { ...it, result: "repair", note: notes[n] } : it);
+        if (photo) body.photos = [{ id: photo, caption: "Squeal", checklist_item_id: (body.items as { checklist_item_id: number }[])[0].checklist_item_id }];
+        const r = await inject("POST", "/inspections", { cookie: crewCookie, body });
+        assert.equal(r.statusCode, 201, r.body);
+        for (const it of await q(`SELECT id, note FROM inspection_items WHERE inspection_id = $1 AND result = 'repair'`, [r.json().id])) {
+          ids[it.note] = it.id;
+        }
+      };
+      const { id: photoId } = await uploadPhoto(crewCookie);
+      await submit(truckA, ["Brakes squeal", "Tail light out", "Seat torn"], photoId);
+      await submit(truckB, ["Other truck's mirror"]);
+    });
+
+    test("who can make one, and only this truck's open repairs go on it; a retry doesn't make a second", async () => {
+      assert.equal((await make(crewCookie, { item_ids: [ids["Brakes squeal"]] })).statusCode, 403);
+      assert.equal((await make(supCookie, { item_ids: [] })).statusCode, 400);
+      assert.equal((await make(supCookie, { client_id: "nope", item_ids: [ids["Brakes squeal"]] })).statusCode, 400);
+      const other = await make(supCookie, { item_ids: [ids["Brakes squeal"], ids["Other truck's mirror"]] });
+      assert.equal(other.statusCode, 422);
+      assert.deepEqual(other.json().details, { code: "bad_repairs", items: [ids["Other truck's mirror"]] });
+      assert.equal((await inject("POST", `/inspection-items/${ids["Seat torn"]}/resolve`, { cookie: supCookie, body: { note: "Patched" } })).statusCode, 200);
+      assert.equal((await make(supCookie, { item_ids: [ids["Seat torn"]] })).statusCode, 422, "a fixed repair can't go on a ticket");
+
+      const body = {
+        client_id: randomUUID(), vehicle_id: truckA, item_ids: [ids["Brakes squeal"], ids["Tail light out"]],
+        sent_to: "Frank's shop", note: "Call before\nanything over $300",
+      };
+      const a = await inject("POST", "/repair-tickets", { cookie: shopCookie, body });
+      assert.equal(a.statusCode, 201, a.body);
+      t1 = a.json().id;
+      assert.equal(a.json().number, `RT-${String(t1).padStart(4, "0")}`);
+      const again = await inject("POST", "/repair-tickets", { cookie: shopCookie, body });
+      assert.equal(again.statusCode, 200);
+      assert.deepEqual(again.json(), { id: t1, number: a.json().number, duplicate: true });
+      const b = await make(supCookie, { item_ids: [ids["Brakes squeal"]], sent_to: "Discount Tire" });
+      assert.equal(b.statusCode, 201);
+      t2 = b.json().id;
+      assert.equal(Number((await one(`SELECT count(*) AS n FROM repair_tickets WHERE vehicle_id = $1`, [truckA])).n), 2);
+    });
+
+    test("a ticket's repairs, the truck's list, and which repairs are on a ticket", async () => {
+      const t = (await inject("GET", `/repair-tickets/${t1}`, { cookie: shopCookie })).json();
+      assert.equal(t.truck_code, "AZ042");
+      assert.equal(t.sent_to, "Frank's shop");
+      assert.deepEqual(t.items.map((it: { position: number; note: string }) => [it.position, it.note]), [[1, "Brakes squeal"], [2, "Tail light out"]]);
+      assert.equal(t.items[0].photo_ids.length, 1);
+      assert.equal(JSON.stringify(t).includes("file_path"), false, "no storage paths sent to the phone");
+      assert.equal((await inject("GET", `/repair-tickets/${t1}`, { cookie: crewCookie })).statusCode, 403);
+
+      const list = (await inject("GET", `/vehicles/${truckA}/repair-tickets`, { cookie: supCookie })).json();
+      assert.deepEqual(list.map((x: { id: number; items: number; fixed: number }) => [x.id, x.items, x.fixed]), [[t2, 1, 0], [t1, 2, 0]]);
+      const board = (await inject("GET", `/repairs?vehicle_id=${truckA}`, { cookie: supCookie })).json();
+      const on = (note: string) => board.find((r: { note: string }) => r.note === note).ticket_ids;
+      assert.deepEqual(on("Brakes squeal"), [t1, t2]);
+      assert.deepEqual(on("Tail light out"), [t1]);
+      const truck = (await inject("GET", `/vehicles/${truckA}`, { cookie: crewCookie })).json();
+      assert.deepEqual(truck.openRepairs.find((r: { note: string }) => r.note === "Tail light out").ticket_ids, [t1]);
+      const names = (await inject("GET", "/repair-tickets/sent-to", { cookie: shopCookie })).json();
+      assert.deepEqual(names.slice(0, 2), ["Discount Tire", "Frank's shop"]);
+      const csvRes = await inject("GET", `/export/repairs.csv?vehicle_id=${truckA}`, { cookie: supCookie });
+      assert.match(csvRes.body, new RegExp(`RT-${String(t1).padStart(4, "0")}; RT-${String(t2).padStart(4, "0")}`));
+    });
+
+    test("the ticket PDF: number, truck, problems, photos and blank lines for the shop", async () => {
+      const { loadTicket } = await import("../src/routes/tickets.ts");
+      const { ticketPdfHtml } = await import("../src/ticket-pdf.ts");
+      const html = await ticketPdfHtml((await loadTicket(t1))!);
+      const num = `RT-${String(t1).padStart(4, "0")}`;
+      for (const s of [num, "AZ042", "Frank&#39;s shop", "Call before\nanything over $300", "Brakes squeal", "Tail light out",
+        "Work done", "Parts used", "Signature", "11/12/2026"]) assert.ok(html.includes(s), s);
+      assert.match(html, /<img src="data:image\/jpeg;base64,/, "the repair's photo is on it");
+      assert.ok(!html.includes(">VOID<"));
+      const pdf = await inject("GET", `/repair-tickets/${t1}/pdf`, { cookie: shopCookie });
+      assert.equal(pdf.statusCode, 200);
+      assert.equal(pdf.headers["content-type"], "application/pdf");
+      assert.equal(pdf.rawPayload.subarray(0, 4).toString(), "%PDF");
+      assert.match(String(pdf.headers["content-disposition"]), new RegExp(`^attachment; filename="AZ042_repair_ticket_${num}.pdf"`));
+      const inline = await inject("GET", `/repair-tickets/${t1}/pdf?inline=1`, { cookie: shopCookie });
+      assert.match(String(inline.headers["content-disposition"]), /^inline;/);
+      assert.equal((await inject("GET", `/repair-tickets/${t1}/pdf`, { cookie: crewCookie })).statusCode, 403);
+    });
+
+    test("a repair fixed in the maintenance log shows as fixed on the ticket", async () => {
+      const e = await inject("POST", "/service-logs", {
+        cookie: shopCookie,
+        body: { client_id: randomUUID(), vehicle_id: truckA, service_date: "2026-11-14", mileage: 81300, category: "repair",
+          description: "New tail light bulb", repair_item_ids: [ids["Tail light out"]] },
+      });
+      assert.equal(e.statusCode, 201, e.body);
+      const t = (await inject("GET", `/repair-tickets/${t1}`, { cookie: supCookie })).json();
+      const tail = t.items.find((it: { note: string }) => it.note === "Tail light out");
+      assert.ok(tail.resolved_at);
+      assert.equal(tail.service_log_id, e.json().id);
+      const list = (await inject("GET", `/vehicles/${truckA}/repair-tickets`, { cookie: supCookie })).json();
+      assert.deepEqual(list.find((x: { id: number }) => x.id === t1).fixed, 1);
+      assert.ok((await (await import("../src/ticket-pdf.ts")).ticketPdfHtml(
+        (await (await import("../src/routes/tickets.ts")).loadTicket(t1))!)).includes("Fixed 11/"));
+    });
+
+    test("void: a reason, once; voided tickets drop off the repairs; nothing about a ticket can be changed or erased", async () => {
+      assert.equal((await inject("POST", `/repair-tickets/${t2}/void`, { cookie: shopCookie, body: {} })).statusCode, 400);
+      assert.equal((await inject("POST", `/repair-tickets/${t2}/void`, { cookie: crewCookie, body: { reason: "x" } })).statusCode, 403);
+      assert.equal((await inject("POST", `/repair-tickets/${t2}/void`, { cookie: shopCookie, body: { reason: "Sent to the wrong shop" } })).statusCode, 200);
+      assert.equal((await inject("POST", `/repair-tickets/${t2}/void`, { cookie: shopCookie, body: { reason: "again" } })).statusCode, 409);
+      const t = (await inject("GET", `/repair-tickets/${t2}`, { cookie: supCookie })).json();
+      assert.equal(t.voided, true);
+      assert.equal(t.void_reason, "Sent to the wrong shop");
+      assert.equal(t.voided_by_name, "Frank Shop");
+      const board = (await inject("GET", `/repairs?vehicle_id=${truckA}`, { cookie: supCookie })).json();
+      assert.deepEqual(board.find((r: { note: string }) => r.note === "Brakes squeal").ticket_ids, [t1]);
+      const { loadTicket } = await import("../src/routes/tickets.ts");
+      const { ticketPdfHtml } = await import("../src/ticket-pdf.ts");
+      const html = await ticketPdfHtml((await loadTicket(t2))!);
+      assert.ok(html.includes(">VOID<") && html.includes("Sent to the wrong shop"));
+
+      await assert.rejects(q(`DELETE FROM repair_tickets WHERE id = $1`, [t1]));
+      await assert.rejects(q(`UPDATE repair_tickets SET note = 'changed' WHERE id = $1`, [t1]));
+      await assert.rejects(q(`UPDATE repair_tickets SET void_reason = 'changed' WHERE id = $1`, [t2]), "a void can't be edited");
+      await assert.rejects(q(`DELETE FROM repair_ticket_items WHERE ticket_id = $1`, [t1]));
+      await assert.rejects(q(`UPDATE repair_ticket_items SET position = 9 WHERE ticket_id = $1`, [t1]));
+      assert.equal(Number((await one(`SELECT count(*) AS n FROM repair_ticket_items WHERE ticket_id = $1`, [t1])).n), 2);
+    });
+  });
 }

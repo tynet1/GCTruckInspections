@@ -556,7 +556,9 @@ export default async function inspectionRoutes(app: FastifyInstance) {
               i.id AS inspection_id, i.inspection_date, i.inspector_name,
               v.id AS vehicle_id, v.truck_code, v.year, v.make, v.model,
               (current_date - i.inspection_date) AS days_open,
-              ARRAY(SELECT p.id FROM photos p WHERE p.inspection_item_id = ii.id ORDER BY p.created_at, p.id) AS photo_ids
+              ARRAY(SELECT p.id FROM photos p WHERE p.inspection_item_id = ii.id ORDER BY p.created_at, p.id) AS photo_ids,
+              ARRAY(SELECT ti.ticket_id FROM repair_ticket_items ti JOIN repair_tickets t ON t.id = ti.ticket_id
+                     WHERE ti.inspection_item_id = ii.id AND t.voided_at IS NULL ORDER BY ti.ticket_id) AS ticket_ids
          FROM inspection_items ii
          JOIN live_inspections i ON i.id = ii.inspection_id
          JOIN vehicles v ON v.id = i.vehicle_id

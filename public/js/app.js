@@ -22,7 +22,7 @@ const routes = [
   { re: /^#\/truck\/(\d+)$/, view: truck },
   { re: /^#\/inspect\/(\d+)$/, view: form },
   { re: /^#\/inspection\/([0-9a-f-]{36})$/i, view: detail },
-  { re: /^#\/service\/(new|edit)\/(\d+)(?:\?(fix|fixdmg)=(\d+))?$/, view: serviceForm, allow: () => can.logService() },
+  { re: /^#\/service\/(new|edit)\/(\d+)(?:\?(fix|fixdmg|ticket)=(\d+))?$/, view: serviceForm, allow: () => can.logService() },
   { re: /^#\/service\/(\d+)$/, view: serviceDetail, allow: () => can.seeService() },
   { re: /^#\/export(?:\?truck=(\d+))?$/, view: exportView, role: "supervisor" },
   { re: /^#\/csv(?:\?([\w=&-]*))?$/, view: csvView, allow: () => can.seeService() },

@@ -15,6 +15,7 @@ import { migrate } from "./migrate.ts";
 import { closePdfBrowser } from "./pdf.ts";
 import adminRoutes from "./routes/admin.ts";
 import exportRoutes from "./routes/export.ts";
+import ticketRoutes from "./routes/tickets.ts";
 import authRoutes from "./routes/auth.ts";
 import brandingRoutes from "./routes/branding.ts";
 import inspectionRoutes from "./routes/inspections.ts";
@@ -116,6 +117,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
       await api.register(serviceRoutes);
       await api.register(adminRoutes);
       await api.register(exportRoutes);
+      await api.register(ticketRoutes);
       api.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 404, message: "Not found." }));
     },
     { prefix: "/api" },

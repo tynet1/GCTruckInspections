@@ -18,18 +18,20 @@ const persist = debounce(() => { if (d && d.touched) saveSvcDraft(d); }, 400);
 /**
  * mode "new": id is the truck id. mode "edit": id is the entry id.
  * From a "Log fix" button: fixKind "fix" + a repair item id, or "fixdmg" + a damage mark id; it starts ticked.
+ * From a repair ticket's "Log fix": fixKind "ticket" + the ticket id; its open repairs start ticked.
  */
 export async function render(app, mode, id, fixKind, fixId) {
   const nav = state.nav;
   const isEdit = mode === "edit";
   setHeader({ title: isEdit ? "Edit maintenance" : "Log maintenance", back: isEdit ? `#/service/${id}` : "#/" });
   app.innerHTML = `<div class="empty">Loading…</div>`;
-  let entry = null, vehicle, openRepairs, damage, config, history;
+  let entry = null, vehicle, openRepairs, damage, config, history, ticket = null;
   try {
     if (isEdit) entry = await api(`/service-logs/${id}`);
     const vid = isEdit ? entry.vehicle.id : Number(id);
-    [{ vehicle, openRepairs, damage }, config, history] = await Promise.all([
+    [{ vehicle, openRepairs, damage }, config, history, ticket] = await Promise.all([
       api(`/vehicles/${vid}`), api("/service-config"), api(`/vehicles/${vid}/service`).catch(() => null),
+      fixKind === "ticket" && !isEdit ? api(`/repair-tickets/${fixId}`).catch(() => null) : null,
     ]);
   } catch (e) {
     if (stale(nav)) return;
@@ -52,7 +54,8 @@ export async function render(app, mode, id, fixKind, fixId) {
     app, vehicle, categories: config.categories, openRepairs, damage: damage || [], entry,
     currentMiles: history?.current_mileage ?? vehicle.last_mileage ?? null,
   };
-  if (fixId && !isEdit) (fixKind === "fixdmg" ? startFixDamage : startFix)(Number(fixId));
+  if (fixKind === "ticket") { if (ticket && !isEdit) startFixTicket(ticket); }
+  else if (fixId && !isEdit) (fixKind === "fixdmg" ? startFixDamage : startFix)(Number(fixId));
   setHeader({
     title: isEdit ? "Edit maintenance" : d.touched ? "Maintenance draft" : "Log maintenance",
     sub: `${vehicle.truck_code} · ${vehicleInfo(vehicle)}`,
@@ -155,6 +158,24 @@ function applyAuto() {
   d.autoRepairs = auto;
   redrawRepairs();
   if (added) toast(`Ticked ${added} matching repair${added > 1 ? "s" : ""}. Untick any you didn't fix.`, 3500);
+}
+
+/** Came from a repair ticket's "Log fix": tick its repairs that are still open, and name the ticket in the notes. */
+function startFixTicket(t) {
+  if (t.vehicle_id !== ctx.vehicle.id || t.voided) return;
+  const open = new Set(openRepairs().map((r) => r.id));
+  let n = 0;
+  for (const it of t.items) {
+    if (!open.has(it.id) || d.repairs.includes(it.id)) continue;
+    d.repairs.push(it.id);
+    d.autoRepairs = (d.autoRepairs || []).filter((id) => id !== it.id);
+    n++;
+  }
+  if (!d.types.length) d.types = ["repair"];
+  if (!d.notes.includes(t.number)) d.notes = [d.notes.trim(), `Repair ticket ${t.number}`].filter(Boolean).join("\n");
+  d.touched = true;
+  saveSvcDraft(d);
+  if (n) toast(`Ticked ${n} repair${n > 1 ? "s" : ""} from ${t.number}. Untick any that weren't fixed.`, 3500);
 }
 
 /** Came from a repair's "Log fix" button: tick it, and pick the type of work if none is chosen yet. */

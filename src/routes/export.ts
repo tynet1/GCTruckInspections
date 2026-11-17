@@ -9,6 +9,7 @@ import { one, q } from "../db.ts";
 import { bad, isValidDate } from "../http.ts";
 import { REG_ON_FILE, REG_ON_FILE_JOINS } from "./inspections.ts";
 import { CATEGORIES, workOf } from "./service.ts";
+import { ticketNumber } from "./tickets.ts";
 
 const MAX_ROWS = 20000;
 const SECTION: Record<string, string> = { exterior: "Exterior", interior: "Interior", trailer: "Trailer & crew" };
@@ -149,7 +150,9 @@ export default async function exportRoutes(app: FastifyInstance) {
               ii.resolved_at, ru.name AS resolved_by_name, ii.resolution_note,
               (SELECT min(slr.service_log_id) FROM service_log_repairs slr JOIN service_logs sl ON sl.id = slr.service_log_id
                 WHERE slr.inspection_item_id = ii.id AND slr.active AND slr.resolved_here AND sl.voided_at IS NULL) AS service_log_id,
-              (SELECT count(*) FROM photos p WHERE p.inspection_item_id = ii.id) AS photos
+              (SELECT count(*) FROM photos p WHERE p.inspection_item_id = ii.id) AS photos,
+              ARRAY(SELECT ti.ticket_id FROM repair_ticket_items ti JOIN repair_tickets t ON t.id = ti.ticket_id
+                     WHERE ti.inspection_item_id = ii.id AND t.voided_at IS NULL ORDER BY ti.ticket_id) AS ticket_ids
          FROM inspection_items ii
          JOIN live_inspections i ON i.id = ii.inspection_id
          JOIN vehicles v ON v.id = i.vehicle_id
@@ -162,11 +165,12 @@ export default async function exportRoutes(app: FastifyInstance) {
     const link = linkBase(req);
     return send(reply, req, f.more ? "repairs" : "open_repairs", f, [
       "Truck", "Vehicle", "Section", "Item", "Note", "Reported", "Reported by", "Status", "Days open", "Fixed at",
-      "Fixed by", "How it was fixed", "Maintenance entry", "Photos", "Inspection link",
+      "Fixed by", "How it was fixed", "Maintenance entry", "Repair tickets", "Photos", "Inspection link",
     ], rows.map((r) => [
       r.truck_code, r.vehicle, SECTION[r.section] ?? r.section, r.label, r.note, r.inspection_date, r.inspector_name,
       r.resolved_at ? "Fixed" : "Open", num(r.days_open), r.resolved_at, r.resolved_by_name, r.resolution_note,
-      r.service_log_id ? `${link}service/${r.service_log_id}` : null, num(r.photos), `${link}inspection/${r.inspection_id}`,
+      r.service_log_id ? `${link}service/${r.service_log_id}` : null,
+      (r.ticket_ids as number[]).map(ticketNumber).join("; "), num(r.photos), `${link}inspection/${r.inspection_id}`,
     ]));
   });
 

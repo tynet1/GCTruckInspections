@@ -7,7 +7,7 @@ import { files } from "./storage.ts";
 
 type Data = NonNullable<Awaited<ReturnType<typeof import("./routes/inspections.ts").loadInspection>>>;
 
-const esc = (s: unknown) =>
+export const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 /**
@@ -27,11 +27,11 @@ export const fmtDate = (d: unknown) => {
 
 const CHECK = `<svg class="ck" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3.2L13 4.8" fill="none" stroke="#111" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
-function dataUrl(buf: Buffer, mime: string) {
+export function dataUrl(buf: Buffer, mime: string) {
   return `data:${mime};base64,${buf.toString("base64")}`;
 }
 
-async function safeRead(key: string | null | undefined): Promise<Buffer | null> {
+export async function safeRead(key: string | null | undefined): Promise<Buffer | null> {
   if (!key) return null;
   try {
     return await files.read(key);

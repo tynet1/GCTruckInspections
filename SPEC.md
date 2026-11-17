@@ -132,6 +132,7 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
   an edit made from an out-of-date copy is refused instead of overwriting, and voiding reopens the repairs the entry closed.
   Orphan-photo cleanup skips photos attached to an entry.
 - Uploads pause (the phone keeps the photos and retries) before the disk the database lives on fills up (009).
+- Repair tickets (010) can't be deleted or changed, only voided once with a reason; the repairs on a ticket never change.
 
 ## 5. Business rules
 
@@ -207,6 +208,14 @@ GET  /export/inspections.csv?vehicle_id&from&to&include=1   (archived too)      
 GET  /export/repairs.csv?vehicle_id&from&to&include=1       (fixed too)         supervisor, shop, admin
 GET  /export/maintenance.csv?vehicle_id&from&to&include=1   (voided too)        supervisor, shop, admin
 GET  /export/trucks.csv?include=1                           (retired too)       supervisor, shop, admin
+
+Repair tickets (built), supervisor, shop, admin:
+POST /repair-tickets {client_id, vehicle_id, item_ids[], sent_to?, note?}   -> {id, number}  (200 + duplicate on a retry)
+GET  /repair-tickets/:id             -> the ticket, its truck, and each repair with whether and how it was fixed
+GET  /repair-tickets/:id/pdf[?inline=1]
+POST /repair-tickets/:id/void {reason}
+GET  /vehicles/:id/repair-tickets    -> the truck's tickets with fixed counts
+GET  /repair-tickets/sent-to         -> recent "Sent to" names
 admin CRUD: /vehicles, /trailers, /diagrams, /users, /checklist-items
 
 Maintenance log (built):
@@ -320,8 +329,17 @@ POST /service-logs/:id/void         {reason}                                    
      which overlaps fleet management. Tyler's answers (2026-11-17): the **yard-care equipment carried on the trailers**,
      about **8 pieces** (string trimmers, blowers and the like); each is numbered or tagged; **periodic** inspections for
      now; equipment gets **maintenance entries and next-due** like trucks. Paper forms per type: ask for copies if they exist.
-   - **PDF repair ticket (2026-11-17).** A printable or shareable ticket for repairs that go to the shop or an outside vendor.
-     Proposed: from the repairs board or a truck page, pick one or more open repairs on a truck and make a ticket. The ticket
+   - **PDF repair ticket (built 2026-11-17, migration 010).** A printable or shareable ticket for repairs that go to the shop or an outside vendor.
+     From the repairs board (a **Ticket** button per truck) or a truck page (**Make repair ticket** above its open repairs),
+     a supervisor, the shop or an admin ticks the repairs (all start ticked), adds an optional "Sent to" (names used before
+     are suggested) and note, and taps **Make ticket**. It needs signal, like a registration update; a retry never makes a
+     second ticket. The ticket gets the next number (**RT-0001**…) and opens with **Share or email PDF** (where the phone
+     can share files), **Save PDF** and **Open PDF to print**. Each repair on a ticket shows an RT pill on the board and the
+     truck page; the truck page lists its tickets (Open, "1 of 2 fixed", All fixed, Voided). A ticket's **Log fix** (shop,
+     admin) opens a maintenance entry with its still-open repairs ticked and "Repair ticket RT-0001" in the notes; fixes made
+     any way show on the ticket and its PDF ("Fixed 11/20/2026 by Frank (maintenance log): …"). A mistaken ticket is
+     **voided** with a reason: it stays listed, its PDF says VOID, and its repairs stay open. Tickets are never deleted and
+     their repairs never change (database triggers); the repairs CSV lists each repair's tickets. Original plan: the ticket
      carries a ticket number, branding, the truck (code, VIN, plate, last mileage), each problem with its note, photos, who
      reported it and when, and blank lines for the shop: work done, parts, cost, date, signature. The ticket is logged on the
      truck, and closing its repairs still goes through a maintenance entry (Log fix), which can name the ticket. Tyler's

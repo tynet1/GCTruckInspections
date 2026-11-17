@@ -35,6 +35,7 @@ on the phone and upload when signal returns.
 | Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve | done |
 | Registration expiration: supervisors update it from the form, sign-off or truck page; full history; PDFs keep the date on file | done |
 | CSV export: inspections, repairs, maintenance log, trucks, with truck/date filters | done |
+| PDF repair ticket: pick repairs on a truck, numbered PDF to print/share/email, Log fix from it, void with a reason | done |
 | Checklist editor | not started |
 
 ## Layout

@@ -307,7 +307,9 @@ export default async function vehicleRoutes(app: FastifyInstance) {
     const [vehicle] = await vehicleRows("WHERE vs.id = $1", [id]);
     if (!vehicle) throw notFound("Truck not found.");
     const openRepairs = await q(
-      `SELECT ii.id, ii.section, ii.label_snapshot AS label, ii.note, i.id AS inspection_id, i.inspection_date
+      `SELECT ii.id, ii.section, ii.label_snapshot AS label, ii.note, i.id AS inspection_id, i.inspection_date,
+              ARRAY(SELECT ti.ticket_id FROM repair_ticket_items ti JOIN repair_tickets t ON t.id = ti.ticket_id
+                     WHERE ti.inspection_item_id = ii.id AND t.voided_at IS NULL ORDER BY ti.ticket_id) AS ticket_ids
          FROM inspection_items ii JOIN live_inspections i ON i.id = ii.inspection_id
         WHERE i.vehicle_id = $1 AND ii.result = 'repair' AND ii.resolved_at IS NULL
         ORDER BY i.inspection_date DESC, i.created_at DESC, ii.section, ii.id`,

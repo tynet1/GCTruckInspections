@@ -36,6 +36,7 @@ const SHELL_FILES = [
   "/js/views/service-detail.js",
   "/js/views/service-form.js",
   "/js/views/signin.js",
+  "/js/views/tickets.js",
   "/js/views/truck.js",
   // Every bundled diagram, so a truck's form works offline even if it was never opened before.
   "/diagrams/az018-truck.jpg",
