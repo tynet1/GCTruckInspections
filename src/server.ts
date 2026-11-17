@@ -7,7 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import type { FastifyError, FastifyInstance } from "fastify";
-import { loadSession } from "./auth.ts";
+import { addressKey, loadSession } from "./auth.ts";
 import { config } from "./config.ts";
 import { pool, q } from "./db.ts";
 import { HttpError } from "./http.ts";
@@ -53,7 +53,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   const app = Fastify({
     logger: opts.logger === false ? false : { level: config.logLevel },
     disableRequestLogging: config.logLevel !== "debug",
-    trustProxy: true,
+    trustProxy: config.trustProxy,
     bodyLimit: 1024 * 1024,
   });
 
@@ -61,7 +61,9 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   await app.register(multipart);
   await app.register(rateLimit, {
     global: false,
-    keyGenerator: (req) => String(req.headers["cf-connecting-ip"] ?? req.ip),
+    // req.ip is the first address past our own proxies (see config.trustProxy). Never a client-set header such as
+    // CF-Connecting-IP: anyone can send that straight to the droplet.
+    keyGenerator: (req) => addressKey(req.ip),
   });
 
   app.decorateRequest("user", null);
@@ -83,15 +85,19 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
     reply.header("x-frame-options", "DENY");
     reply.header("content-security-policy", CSP);
     reply.header("permissions-policy", "geolocation=(), microphone=()");
+    // Over HTTPS, phones remember to never use plain http for this site (a year, renewed on every visit).
+    if (req.protocol === "https") reply.header("strict-transport-security", "max-age=31536000");
     if (req.url.startsWith("/api/") && !reply.hasHeader("cache-control")) reply.header("cache-control", "no-store");
     return payload;
   });
 
   app.setErrorHandler((err: FastifyError | HttpError, req, reply) => {
     const status = err.statusCode ?? 500;
-    if (status >= 500) req.log.error(err);
-    const details = err instanceof HttpError ? err.details : undefined;
-    const message = status >= 500 ? "Something went wrong on the server. Try again." : err.message;
+    // An HttpError is a deliberate answer (e.g. 503 "disk nearly full"), so its message is meant for the phone.
+    const meant = err instanceof HttpError;
+    if (status >= 500 && !meant) req.log.error(err);
+    const details = meant ? err.details : undefined;
+    const message = status >= 500 && !meant ? "Something went wrong on the server. Try again." : err.message;
     return reply.code(status).send({ error: status, message, ...(details ? { details } : {}) });
   });
 

@@ -136,7 +136,7 @@ export async function sendQueued(vehicleId) {
       return { state: "waiting", error: err };
     }
     if (err.retryable || err.status === 401) {
-      d.lastError = err.status === 401 ? "Sign in to finish uploading" : "Waiting for signal";
+      d.lastError = err.status === 401 ? "Sign in to finish uploading" : err.details?.retry_later ? err.message : "Waiting for signal";
       d.attempts = (d.attempts || 0) + 1;
       await saveDraft(d);
       return { state: "waiting", error: err };

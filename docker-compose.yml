@@ -32,6 +32,9 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-auto}
+      UPLOAD_DAILY_MB: ${UPLOAD_DAILY_MB:-}
+      UPLOAD_MIN_FREE_MB: ${UPLOAD_MIN_FREE_MB:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
       TZ: ${TZ:-America/Phoenix}
     volumes:
       - uploads:/data/uploads

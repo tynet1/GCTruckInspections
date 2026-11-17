@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { requireUser } from "../auth.ts";
 import { config } from "../config.ts";
 import { one, q } from "../db.ts";
-import { bad, conflict, notFound, UUID_RE, uuidParam } from "../http.ts";
+import { bad, conflict, HttpError, notFound, UUID_RE, uuidParam } from "../http.ts";
 import { files, imageType, newKey } from "../storage.ts";
 
 export default async function photoRoutes(app: FastifyInstance) {
@@ -29,6 +29,7 @@ export default async function photoRoutes(app: FastifyInstance) {
       if (existing.uploaded_by !== user.id) throw conflict("Photo id already used.");
       return reply.code(200).send({ id });
     }
+    await assertRoomFor(user.id, data.length, req.log);
     const key = newKey(type.ext, id);
     await files.put(key, data);
     await q(
@@ -38,6 +39,26 @@ export default async function photoRoutes(app: FastifyInstance) {
     );
     return reply.code(201).send({ id });
   });
+
+  /**
+   * Refuse a new photo if this person has uploaded a lot today, or the server disk is nearly full (the database is
+   * on the same disk). Both answers tell the phone to keep the photo and try again later, so nothing is lost.
+   */
+  async function assertRoomFor(userId: number, bytes: number, log: { error: (o: object, m: string) => void }) {
+    const free = await files.freeBytes().catch(() => null);
+    if (free !== null && free - bytes < config.photo.minFreeBytes) {
+      log.error({ freeMB: Math.round(free / 1048576) }, "photo uploads paused: the server disk is nearly full");
+      throw new HttpError(503, "The server is nearly out of storage, so your photos are waiting on this phone. They'll upload once your admin frees up space", { code: "disk_low", retry_later: true });
+    }
+    const used = await one<{ bytes: string }>(
+      `SELECT coalesce(sum(bytes), 0) AS bytes FROM photos WHERE uploaded_by = $1 AND created_at > now() - interval '24 hours'`,
+      [userId],
+    );
+    if (Number(used?.bytes ?? 0) + bytes > config.photo.dailyBytesPerUser) {
+      const mb = Math.round(config.photo.dailyBytesPerUser / 1048576);
+      throw new HttpError(429, `You've reached the daily photo limit (${mb >= 1024 ? `${Math.round(mb / 1024)} GB` : `${mb} MB`}), so your photos are waiting on this phone. They'll upload later today or tomorrow`, { code: "upload_cap", retry_later: true });
+    }
+  }
 
   app.get("/photos/:id", async (req, reply) => {
     requireUser(req);

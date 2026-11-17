@@ -1,5 +1,5 @@
-import type { FastifyInstance } from "fastify";
-import { assertNotLocked, endSession, PIN_RE, recordFailure, requireUser, startSession, verifySecret } from "../auth.ts";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { AddressFailures, beginAttempt, endSession, PIN_RE, recordFailure, requireUser, startSession, verifySecret } from "../auth.ts";
 import type { Role } from "../auth.ts";
 import { one, q } from "../db.ts";
 import { bad, HttpError, obj } from "../http.ts";
@@ -11,12 +11,30 @@ interface LoginRow {
   role: Role;
   pin_hash: string | null;
   password_hash: string | null;
-  locked_until: Date | null;
 }
 
 const authLimit = { rateLimit: { max: 15, timeWindow: "1 minute" } };
 
 export default async function authRoutes(app: FastifyInstance) {
+  const network = new AddressFailures();
+
+  /** Check a PIN or password with the account lockout and the per-network limit around it. */
+  async function check(req: FastifyRequest, u: LoginRow | undefined, secret: string, stored: string | null): Promise<boolean> {
+    network.check(req.ip);
+    const attempt = u ? await beginAttempt(u.id) : 0;
+    // Takes the same time when there's no such account or it has no PIN/password.
+    if ((await verifySecret(secret, stored)) && u) {
+      network.forgive(req.ip, u.id);
+      return true;
+    }
+    if (network.record(req.ip, u?.id ?? 0)) req.log.warn({ ip: req.ip }, "sign-in: too many wrong tries from one network");
+    if (u) {
+      const mins = await recordFailure(u.id, attempt);
+      if (mins) req.log.warn({ user: u.id, ip: req.ip, minutes: mins }, "sign-in: account locked after wrong tries");
+    }
+    return false;
+  }
+
   // Names for the crew sign-in picker (anyone with a PIN).
   app.get("/auth/crew", async () =>
     q(`SELECT id, name FROM users WHERE active AND pin_hash IS NOT NULL ORDER BY lower(name)`));
@@ -29,10 +47,7 @@ export default async function authRoutes(app: FastifyInstance) {
       throw bad("Pick your name and enter your 4–6 digit PIN.");
     }
     const u = await one<LoginRow>(`SELECT * FROM users WHERE id = $1 AND active`, [userId]);
-    if (u) await assertNotLocked(u);
-    const ok = await verifySecret(pin, u?.pin_hash ?? null);
-    if (!u || !ok) {
-      if (u) await recordFailure(u.id);
+    if (!(await check(req, u, pin, u?.pin_hash ?? null)) || !u) {
       throw new HttpError(401, "That PIN didn't match. Try again.");
     }
     await startSession(req, reply, u);
@@ -45,10 +60,7 @@ export default async function authRoutes(app: FastifyInstance) {
     const password = typeof b.password === "string" ? b.password : "";
     if (!email || !password) throw bad("Enter your email and password.");
     const u = await one<LoginRow>(`SELECT * FROM users WHERE lower(email) = $1 AND active`, [email]);
-    if (u) await assertNotLocked(u);
-    const ok = await verifySecret(password, u?.password_hash ?? null);
-    if (!u || !ok) {
-      if (u) await recordFailure(u.id);
+    if (!(await check(req, u, password, u?.password_hash ?? null)) || !u) {
       throw new HttpError(401, "Email or password is wrong.");
     }
     await startSession(req, reply, u);

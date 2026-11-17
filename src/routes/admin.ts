@@ -74,6 +74,7 @@ export default async function adminRoutes(app: FastifyInstance) {
     if (f.pin_hash !== undefined || f.password_hash !== undefined) {
       f.failed_logins = 0;
       f.locked_until = null;
+      f.lockouts = 0;
     }
     const cols = Object.keys(f);
     if (!cols.length) return { ok: true };

@@ -24,6 +24,7 @@ if (!url) {
   const { ensureAdmin, seedVehicles } = await import("../src/seed.ts");
   const { buildApp } = await import("../src/server.ts");
   const { hashSecret } = await import("../src/auth.ts");
+  const { config } = await import("../src/config.ts");
   const { closePdfBrowser } = await import("../src/pdf.ts");
   const { cleanupOrphanPhotos } = await import("../src/routes/photos.ts");
   const { loadInspection } = await import("../src/routes/inspections.ts");
@@ -1222,6 +1223,146 @@ if (!url) {
       await assert.rejects(q(`UPDATE registration_changes SET expires = '2020-01-01' WHERE vehicle_id = $1`, [other]));
       await assert.rejects(q(`DELETE FROM registration_changes WHERE vehicle_id = $1`, [other]));
       assert.equal((await history(other)).length, h.length);
+    });
+  });
+
+  describe("security limits", () => {
+    // How requests reach the app on the droplet: from Caddy on Docker's private network, with the client's real
+    // address in X-Forwarded-For (Caddy replaces whatever the client sent there).
+    async function pinFrom(clientIp: string, userId: number, pin: string, extra: Record<string, string> = {}) {
+      return app.inject({
+        method: "POST", url: "/api/auth/pin", remoteAddress: "172.18.0.5",
+        headers: { ...H, "x-forwarded-for": clientIp, ...extra }, payload: { user_id: userId, pin },
+      });
+    }
+    const lockMins = async (id: number) =>
+      one(`SELECT round(extract(epoch FROM locked_until - now()) / 60)::int AS m, lockouts FROM users WHERE id = $1`, [id]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const limits = config.lockout as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const photoLimits = config.photo as any;
+
+    test("the sign-in rate limit counts the real address; a faked CF-Connecting-IP or X-Forwarded-For doesn't dodge it", async () => {
+      const codes = new Set<number>();
+      for (let i = 0; i < 15; i++) {
+        // Each try claims a different address, the way the old limit could be dodged.
+        codes.add((await pinFrom("198.51.100.1, 203.0.113.7", 999999, "0000", { "cf-connecting-ip": `10.9.9.${i}` })).statusCode);
+      }
+      assert.deepEqual([...codes], [401]);
+      assert.equal((await pinFrom("203.0.113.7", 999999, "0000", { "cf-connecting-ip": "10.9.9.99" })).statusCode, 429);
+      assert.equal((await pinFrom("203.0.113.8", 999999, "0000")).statusCode, 401, "another address isn't affected");
+    });
+
+    test("one network gets a set number of wrong tries across all accounts; your own typos stop counting once you get in", async () => {
+      const crew = await one(`SELECT id FROM users WHERE name = 'Casey Crew'`);
+      const before = limits.addressMaxFailures;
+      limits.addressMaxFailures = 3;
+      try {
+        const net = "203.0.113.20";
+        assert.equal((await pinFrom(net, crew.id, "1111")).statusCode, 401);
+        assert.equal((await pinFrom(net, crew.id, "2222")).statusCode, 401);
+        assert.equal((await pinFrom(net, crew.id, "1234")).statusCode, 200, "Casey's own typos are forgiven");
+        for (const id of [999998, 999997, 999996]) assert.equal((await pinFrom(net, id, "0000")).statusCode, 401);
+        const blocked = await pinFrom(net, crew.id, "1234");
+        assert.equal(blocked.statusCode, 429);
+        assert.match(blocked.json().message, /from this network/);
+        assert.equal((await pinFrom("203.0.113.21", crew.id, "1234")).statusCode, 200, "other networks still sign in");
+        // For IPv6 the whole /64 is one network (a phone can pick any address in it).
+        assert.equal((await pinFrom("2001:db8:5:6::1", 999995, "0000")).statusCode, 401);
+        assert.equal((await pinFrom("2001:db8:5:6::2", 999995, "0000")).statusCode, 401);
+        assert.equal((await pinFrom("2001:db8:5:6:ffff::3", 999995, "0000")).statusCode, 401);
+        assert.equal((await pinFrom("2001:db8:5:6::4", crew.id, "1234")).statusCode, 429);
+        assert.equal((await pinFrom("2001:db8:5:7::1", crew.id, "1234")).statusCode, 200);
+      } finally {
+        limits.addressMaxFailures = before;
+      }
+    });
+
+    test("an account locked again the same day stays locked longer; a day later it starts over", async () => {
+      await q(`INSERT INTO users (name, role, pin_hash) VALUES ('Lock Twice', 'crew', $1)`, [await hashSecret("5555")]);
+      const u = await one(`SELECT id FROM users WHERE name = 'Lock Twice'`);
+      let net = 30;
+      const fiveWrong = async () => {
+        const from = `203.0.113.${net++}`;
+        for (let i = 0; i < 5; i++) assert.equal((await pinFrom(from, u.id, "0000")).statusCode, 401);
+      };
+      const lockPasses = () => q(`UPDATE users SET locked_until = now() - interval '1 second' WHERE id = $1`, [u.id]);
+
+      await fiveWrong();
+      assert.deepEqual(await lockMins(u.id), { m: 15, lockouts: 1 });
+      const locked = await pinFrom("203.0.113.60", u.id, "5555");
+      assert.equal(locked.statusCode, 429, "the right PIN doesn't get in while locked");
+      assert.match(locked.json().message, /15 minutes/);
+
+      for (const m of [30, 60, 120, 240, 240]) {
+        await lockPasses();
+        await fiveWrong();
+        assert.equal((await lockMins(u.id)).m, m);
+      }
+      assert.match((await pinFrom("203.0.113.61", u.id, "5555")).json().message, /4 hours/);
+
+      await q(`UPDATE users SET locked_until = now() - interval '1 second', last_locked_at = now() - interval '25 hours' WHERE id = $1`, [u.id]);
+      assert.equal((await pinFrom("203.0.113.62", u.id, "5555")).statusCode, 200, "the right PIN works once the lock is over");
+      await fiveWrong();
+      assert.deepEqual(await lockMins(u.id), { m: 15, lockouts: 1 }, "a day later it's back to 15 minutes");
+
+      // An admin setting a new PIN unlocks it and starts the count over.
+      const admin = await inject("POST", "/auth/login", { body: { email: "admin@test.local", password: "admin-password-1" } });
+      const reset = await inject("PATCH", `/admin/users/${u.id}`, { cookie: cookieOf(admin), body: { pin: "6666" } });
+      assert.equal(reset.statusCode, 200);
+      assert.equal((await one(`SELECT lockouts FROM users WHERE id = $1`, [u.id])).lockouts, 0);
+      assert.equal((await pinFrom("203.0.113.63", u.id, "6666")).statusCode, 200);
+    });
+
+    test("guesses sent all at once still get only five tries", async () => {
+      await q(`INSERT INTO users (name, role, pin_hash) VALUES ('Rush', 'crew', $1)`, [await hashSecret("7777")]);
+      const u = await one(`SELECT id FROM users WHERE name = 'Rush'`);
+      const res = await Promise.all(Array.from({ length: 12 }, (_, i) => pinFrom(`203.0.114.${i}`, u.id, `00${10 + i}`)));
+      const checked = res.filter((r) => r.statusCode === 401).length;
+      assert.ok(checked >= 1 && checked <= 5, `only five guesses were checked (got ${checked})`);
+      assert.equal(res.filter((r) => r.statusCode === 429).length, 12 - checked);
+      assert.equal((await pinFrom("203.0.114.99", u.id, "7777")).statusCode, 429, "and the account is locked");
+    });
+
+    test("photo uploads stop at the daily limit and when the disk is nearly full; a retry of a stored photo still works", async () => {
+      const used = Number((await one(
+        `SELECT coalesce(sum(bytes), 0) AS b FROM photos
+          WHERE uploaded_by = (SELECT id FROM users WHERE name = 'Casey Crew') AND created_at > now() - interval '24 hours'`)).b);
+      const before = { ...photoLimits };
+      photoLimits.dailyBytesPerUser = used + 2 * JPEG.length;
+      try {
+        const a = await uploadPhoto(crewCookie);
+        assert.equal(a.res.statusCode, 201);
+        assert.equal((await uploadPhoto(crewCookie)).res.statusCode, 201);
+        const over = await uploadPhoto(crewCookie);
+        assert.equal(over.res.statusCode, 429, "a retryable answer: the phone keeps the photo and tries later");
+        assert.equal(over.res.json().details.code, "upload_cap");
+        assert.equal(over.res.json().details.retry_later, true);
+        assert.equal(await one(`SELECT id FROM photos WHERE id = $1`, [over.id]), undefined);
+        assert.equal((await uploadPhoto(crewCookie, a.id)).res.statusCode, 200, "a photo already stored is still confirmed");
+        assert.equal((await uploadPhoto(supCookie)).res.statusCode, 201, "the limit is per person");
+
+        photoLimits.dailyBytesPerUser = before.dailyBytesPerUser;
+        photoLimits.minFreeBytes = Number.MAX_SAFE_INTEGER;
+        const full = await uploadPhoto(crewCookie);
+        assert.equal(full.res.statusCode, 503);
+        assert.equal(full.res.json().details.code, "disk_low");
+        assert.match(full.res.json().message, /nearly out of storage/, "the phone shows why, not a generic error");
+        assert.equal((await uploadPhoto(crewCookie, a.id)).res.statusCode, 200);
+      } finally {
+        Object.assign(photoLimits, before);
+      }
+      assert.equal((await uploadPhoto(crewCookie)).res.statusCode, 201);
+    });
+
+    test("HSTS is sent over HTTPS only, and only when our own proxy says it was HTTPS", async () => {
+      const get = (remoteAddress: string, headers: Record<string, string>) =>
+        app.inject({ method: "GET", url: "/api/branding", remoteAddress, headers });
+      const https = await get("172.18.0.5", { "x-forwarded-proto": "https", "x-forwarded-for": "203.0.113.40" });
+      assert.equal(https.headers["strict-transport-security"], "max-age=31536000");
+      assert.equal((await get("172.18.0.5", { "x-forwarded-proto": "http" })).headers["strict-transport-security"], undefined);
+      assert.equal((await get("203.0.113.41", { "x-forwarded-proto": "https" })).headers["strict-transport-security"], undefined,
+        "a client talking to the app directly can't claim HTTPS");
     });
   });
 }

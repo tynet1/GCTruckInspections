@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, statfs } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Readable } from "node:stream";
 import { config } from "./config.ts";
@@ -15,6 +15,8 @@ export interface FileStore {
   read(key: string): Promise<Buffer>;
   stream(key: string): Readable;
   remove(key: string): Promise<void>;
+  /** Space left for new files, in bytes (null if the store can't tell). */
+  freeBytes(): Promise<number | null>;
 }
 
 const KEY_RE = /^\d{4}\/\d{2}\/[0-9a-f-]{36}\.(jpg|png)$/;
@@ -64,6 +66,11 @@ class LocalFileStore implements FileStore {
   }
   async remove(key: string): Promise<void> {
     await rm(this.path(key), { force: true });
+  }
+  async freeBytes(): Promise<number | null> {
+    await mkdir(this.root, { recursive: true });
+    const s = await statfs(this.root);
+    return s.bavail * s.bsize;
   }
 }
 

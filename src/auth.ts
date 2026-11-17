@@ -59,21 +59,118 @@ export function checkPassword(pw: string): string | null {
 
 // ---------- Lockout ----------
 
-export async function assertNotLocked(user: { id: number; locked_until: Date | null }): Promise<void> {
-  if (user.locked_until && user.locked_until > new Date()) {
-    const mins = Math.ceil((user.locked_until.getTime() - Date.now()) / 60000);
-    throw new HttpError(429, `Too many wrong tries. Try again in ${mins} minute${mins === 1 ? "" : "s"}, or ask a supervisor.`);
+function waitText(mins: number): string {
+  if (mins > 90) return `${Math.round(mins / 60)} hours`;
+  return `${mins} minute${mins === 1 ? "" : "s"}`;
+}
+const minsUntil = (t: Date) => Math.max(1, Math.ceil((t.getTime() - Date.now()) / 60000));
+
+/**
+ * Count a sign-in try against the account before the PIN or password is checked, so guesses sent in parallel
+ * can't slip past the lockout. Throws 429 while the account is locked. Returns the try's number in the run.
+ */
+export async function beginAttempt(userId: number): Promise<number> {
+  const r = await one<{ failed_logins: number; locked_until: Date | null }>(
+    `UPDATE users SET failed_logins = CASE WHEN locked_until > now() THEN failed_logins ELSE failed_logins + 1 END
+      WHERE id = $1
+      RETURNING failed_logins, locked_until`,
+    [userId],
+  );
+  if (!r) return 0;
+  const locked = (until: Date) =>
+    new HttpError(429, `Too many wrong tries. Try again in ${waitText(minsUntil(until))}, or ask a supervisor.`);
+  if (r.locked_until && r.locked_until > new Date()) throw locked(r.locked_until);
+  if (r.failed_logins > config.lockout.maxFailures) {
+    // More tries arrived at once than the account allows (only guessing does that): lock it without checking this one.
+    await recordFailure(userId, r.failed_logins);
+    const now = await one<{ locked_until: Date }>(`SELECT locked_until FROM users WHERE id = $1`, [userId]);
+    throw locked(now?.locked_until ?? new Date(Date.now() + 60000));
   }
+  return r.failed_logins;
 }
 
-export async function recordFailure(userId: number): Promise<void> {
-  await q(
+/**
+ * The try numbered `attempt` was wrong. The last allowed one locks the account: 15 minutes, doubling with each
+ * lockout in the same 24 hours. Returns the lockout's length in minutes, or null if not locked.
+ */
+export async function recordFailure(userId: number, attempt: number): Promise<number | null> {
+  if (attempt < config.lockout.maxFailures) return null;
+  const r = await one<{ mins: number }>(
     `UPDATE users SET
-       failed_logins = CASE WHEN failed_logins + 1 >= $2 THEN 0 ELSE failed_logins + 1 END,
-       locked_until  = CASE WHEN failed_logins + 1 >= $2 THEN now() + make_interval(mins => $3) ELSE locked_until END
-     WHERE id = $1`,
-    [userId, config.lockout.maxFailures, config.lockout.minutes],
+       failed_logins  = 0,
+       lockouts       = CASE WHEN last_locked_at > now() - interval '24 hours' THEN lockouts + 1 ELSE 1 END,
+       last_locked_at = now(),
+       locked_until   = now() + make_interval(mins => LEAST($2 * power(2, LEAST(
+                          CASE WHEN last_locked_at > now() - interval '24 hours' THEN lockouts ELSE 0 END, 10)), $3)::int)
+     WHERE id = $1
+     RETURNING round(extract(epoch FROM locked_until - now()) / 60)::int AS mins`,
+    [userId, config.lockout.minutes, config.lockout.maxMinutes],
   );
+  return r?.mins ?? null;
+}
+
+// ---------- Wrong sign-ins per network ----------
+
+/**
+ * What the per-network limit counts by: the IPv4 address, or the /64 for IPv6 (one phone or home gets a whole /64,
+ * so counting single IPv6 addresses would be easy to dodge).
+ */
+export function addressKey(ip: string): string {
+  const v4 = /^(?:::ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(ip);
+  if (v4) return v4[1];
+  if (!ip.includes(":")) return ip;
+  const addr = ip.split("%")[0].toLowerCase();
+  const [head, tail] = addr.split("::");
+  const h = head ? head.split(":") : [];
+  const t = tail ? tail.split(":") : [];
+  const groups = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill("0"), ...t];
+  return groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "")).join(":") + "::/64";
+}
+
+/**
+ * Wrong PINs and passwords from one network across all accounts, over a sliding window. Kept in memory: there is one
+ * app process, and a restart only forgets the count. A yard's crew share one address on its Wi-Fi, so someone's own
+ * typos stop counting once they get in.
+ */
+export class AddressFailures {
+  private hits = new Map<string, { at: number; user: number }[]>();
+  private windowMs(): number {
+    return config.lockout.addressWindowMinutes * 60000;
+  }
+  private recent(key: string): { at: number; user: number }[] {
+    const since = Date.now() - this.windowMs();
+    const list = (this.hits.get(key) ?? []).filter((h) => h.at > since);
+    if (list.length) this.hits.set(key, list);
+    else this.hits.delete(key);
+    return list;
+  }
+  /** Throws 429 if this network has had too many wrong tries lately. */
+  check(ip: string): void {
+    const list = this.recent(addressKey(ip));
+    if (list.length >= config.lockout.addressMaxFailures) {
+      const mins = Math.max(1, Math.ceil((list[0].at + this.windowMs() - Date.now()) / 60000));
+      throw new HttpError(429, `Too many wrong sign-ins from this network. Try again in ${waitText(mins)}.`);
+    }
+  }
+  /** Returns true when this wrong try used up the network's allowance. */
+  record(ip: string, userId: number): boolean {
+    const key = addressKey(ip);
+    const list = this.recent(key);
+    list.push({ at: Date.now(), user: userId });
+    this.hits.set(key, list);
+    if (this.hits.size > 20000) {
+      for (const k of this.hits.keys()) this.recent(k);
+      while (this.hits.size > 20000) this.hits.delete(this.hits.keys().next().value as string);
+    }
+    return list.length === config.lockout.addressMaxFailures;
+  }
+  /** A right PIN or password: that person's own wrong tries from this network stop counting. */
+  forgive(ip: string, userId: number): void {
+    const key = addressKey(ip);
+    const list = this.recent(key).filter((h) => h.user !== userId);
+    if (list.length) this.hits.set(key, list);
+    else this.hits.delete(key);
+  }
 }
 
 // ---------- Sessions ----------

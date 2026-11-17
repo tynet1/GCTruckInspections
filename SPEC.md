@@ -46,9 +46,21 @@ Crews are on cellular in the field, so a VM on Tyler's machine is not reachable 
 The pilot can start on Wi-Fi at the yard if needed.
 
 **Current decision (Nov 2026):** Tyler moved it to a DigitalOcean droplet on 2026-11-12, so it's on the open internet
-(Caddy on 80/443; HTTPS needs `SITE_ADDRESS` set to a domain). The PC copy no longer hosts it. Hardening still to do for
-an internet-facing app: the sign-in rate limit trusts a spoofable `CF-Connecting-IP` header, 4-digit crew PINs with a
-public name list, no per-user upload cap, no HSTS, and backups that stay on the droplet.
+(Caddy on 80/443; HTTPS needs `SITE_ADDRESS` set to a domain). The PC copy no longer hosts it.
+Hardening for the open internet (done 2026-11-17, migration 009):
+- The app trusts forwarded headers only from its own proxies (private addresses), so the sign-in limits count the
+  phone's real address. A client-set `CF-Connecting-IP` is ignored.
+- Wrong sign-ins: an account still locks after 5 wrong tries in a row, for 15 minutes, doubling with each lockout that
+  day (30, 60, 120, then 240 minutes). Tries sent all at once count too. One network gets 20 wrong tries an hour
+  across all accounts; for IPv6 a network is its /64. A yard's crew share its Wi-Fi address, so a person's own typos
+  stop counting once they sign in. An admin setting a new PIN or password unlocks the account at once.
+- Photo uploads stop at 1 GB per person per 24 hours (`UPLOAD_DAILY_MB`), and pause for everyone while the server disk
+  has under 2 GB free (`UPLOAD_MIN_FREE_MB`), because the database is on the same disk. Either way the phone keeps the
+  photos and keeps retrying, and the draft shows why.
+- HSTS over HTTPS (one year).
+
+Still open: 4-digit crew PINs (6-digit would make guessing 100 times harder) and the public crew name list, both
+Tyler's call; backups that stay on the droplet.
 
 ## 4. Screens (all phone-first, also good on iPad)
 
@@ -116,6 +128,7 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - Maintenance entries: never deleted (void with a reason; the database refuses deletes), every edit saves the previous version,
   an edit made from an out-of-date copy is refused instead of overwriting, and voiding reopens the repairs the entry closed.
   Orphan-photo cleanup skips photos attached to an entry.
+- Uploads pause (the phone keeps the photos and retries) before the disk the database lives on fills up (009).
 
 ## 5. Business rules
 
@@ -253,8 +266,8 @@ POST /service-logs/:id/void         {reason}                                    
      Still to do: CSV export, checklist editor.
 3. **Code review and hardening:** full code review; review and optimize performance while keeping stability; a burn-in test
    (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
-4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins;
-   move off Tyler's machine to a company VM or Azure.
+4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins.
+   (Moving off Tyler's machine is done: it runs on a DigitalOcean droplet since 2026-11-12.)
 5. **Wishlist (Tyler; not scheduled):** Yard and equipment inspections share one foundation: an inspection type for
    something other than a truck (a yard, a piece of equipment), each type with its own checklist. That foundation is the
    phase-2 checklist editor plus "assets" beyond trucks (trailers are already in fleet management's scope), so build those
