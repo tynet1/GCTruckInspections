@@ -1790,4 +1790,167 @@ if (!url) {
       await inject("PATCH", `/admin/checklist/${first.id}`, { cookie: adminCookie, body: { label: first.label } });
     });
   });
+
+  describe("yard inspections", () => {
+    let shopCookie = "";
+    let adminCookie = "";
+    let yardId = 0;
+    let walkId = "";
+    let oldPhoto = "";
+    type Item = { id: number; section: string; label: string };
+    const todayStr = () => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const config = async () => (await inject("GET", "/yard-config", { cookie: supCookie })).json() as
+      { sections: { key: string }[]; checklist: Item[]; as_of: string };
+    /** A walk answering these items: OK, except notes given for problems. */
+    const walkBody = (items: Item[], problems: Record<number, string> = {}, over: Record<string, unknown> = {}) => ({
+      client_id: randomUUID(), yard_id: yardId, inspection_date: todayStr(), inspector_name: "Sam Super",
+      comments: "Hot day, piles low", signature: PNG,
+      items: items.map((c) => problems[c.id] !== undefined
+        ? { checklist_item_id: c.id, result: "repair", note: problems[c.id] }
+        : { checklist_item_id: c.id, result: "ok" }),
+      photos: [], ...over,
+    });
+    const signIn = async (path: string, payload: object, ip: string) => cookieOf(await app.inject({
+      method: "POST", url: `/api/auth/${path}`, remoteAddress: "172.18.0.5", headers: { ...H, "x-forwarded-for": ip }, payload,
+    }));
+
+    before(async () => {
+      const shop = await one(`SELECT id FROM users WHERE name = 'Frank Shop'`);
+      shopCookie = await signIn("pin", { user_id: shop.id, pin: "1357" }, "203.0.113.240");
+      adminCookie = await signIn("login", { email: "admin@test.local", password: "admin-password-1" }, "203.0.113.241");
+      yardId = (await one(`SELECT id FROM yards WHERE code = 'AZ'`)).id;
+    });
+
+    test("supervisors walk the yard; the shop can look; crews can't", async () => {
+      assert.equal((await inject("GET", "/yard-config", { cookie: crewCookie })).statusCode, 403);
+      assert.equal((await inject("GET", "/yard-config", { cookie: shopCookie })).statusCode, 403);
+      assert.equal((await inject("GET", "/yards", { cookie: crewCookie })).statusCode, 403);
+      assert.equal((await inject("GET", "/yards", { cookie: shopCookie })).statusCode, 200);
+      const cfg = await config();
+      assert.deepEqual(cfg.sections.map((s) => s.key), ["fire", "fuel", "equipment", "access"]);
+      assert.equal(cfg.checklist.length, 12);
+      assert.ok(cfg.checklist.some((c) => c.label === "Fire extinguishers present, charged and tagged"));
+      const yards = (await inject("GET", "/yards", { cookie: supCookie })).json();
+      assert.deepEqual(yards.map((y: { code: string; walked_today: boolean; open_findings: number }) => [y.code, y.walked_today, y.open_findings]),
+        [["AZ", false, 0]]);
+    });
+
+    test("a walk needs every item, a note for each problem and a signature; a retry doesn't make a second", async () => {
+      const cfg = await config();
+      const [ext, rags] = [cfg.checklist[0], cfg.checklist.find((c) => c.label.startsWith("Oily rags"))!];
+      assert.equal((await inject("POST", "/yard-inspections", { cookie: crewCookie, body: walkBody(cfg.checklist) })).statusCode, 403);
+      const short = await inject("POST", "/yard-inspections", { cookie: supCookie, body: walkBody(cfg.checklist.slice(1)) });
+      assert.equal(short.statusCode, 422);
+      assert.deepEqual(short.json().details.missing, [ext.id]);
+      const noNote = await inject("POST", "/yard-inspections", { cookie: supCookie, body: walkBody(cfg.checklist, { [ext.id]: "" }) });
+      assert.equal(noNote.statusCode, 422);
+      assert.equal((await inject("POST", "/yard-inspections", { cookie: supCookie, body: walkBody(cfg.checklist, {}, { signature: null }) })).statusCode, 400);
+
+      // A photo uploaded a while ago (older than the orphan clean-up's 7 days) goes on the walk.
+      const up = await uploadPhoto(supCookie);
+      oldPhoto = up.id;
+      await q(`UPDATE photos SET created_at = now() - interval '30 days' WHERE id = $1`, [oldPhoto]);
+      const body = walkBody(cfg.checklist, { [ext.id]: "Shop extinguisher tag expired", [rags.id]: "Rags in an open bucket" },
+        { photos: [{ id: oldPhoto, caption: "Bucket", checklist_item_id: rags.id }] });
+      const res = await inject("POST", "/yard-inspections", { cookie: supCookie, body });
+      assert.equal(res.statusCode, 201, res.body);
+      walkId = res.json().id;
+      assert.equal(res.json().failed, 2);
+      const again = await inject("POST", "/yard-inspections", { cookie: supCookie, body });
+      assert.equal(again.statusCode, 200);
+      assert.deepEqual(again.json(), { id: walkId, duplicate: true });
+      assert.equal(Number((await one(`SELECT count(*) AS n FROM yard_inspections`)).n), 1);
+
+      const yards = (await inject("GET", "/yards", { cookie: supCookie })).json();
+      assert.equal(yards[0].walked_today, true);
+      assert.equal(yards[0].open_findings, 2);
+      const detail = (await inject("GET", `/yard-inspections/${walkId}`, { cookie: shopCookie })).json();
+      assert.equal(detail.items.length, 12);
+      const rag = detail.items.find((i: { label: string }) => i.label.startsWith("Oily rags"));
+      assert.equal(rag.result, "repair");
+      assert.deepEqual(detail.photos.map((p: { id: string; item_id: number }) => [p.id, p.item_id]), [[oldPhoto, rag.id]]);
+      assert.equal(JSON.stringify(detail).includes("signature_path"), false);
+      const sig = await inject("GET", `/yard-inspections/${walkId}/signature`, { cookie: supCookie });
+      assert.equal(sig.headers["content-type"], "image/png");
+      const hist = (await inject("GET", `/yards/${yardId}/inspections`, { cookie: shopCookie })).json();
+      assert.deepEqual(hist.map((w: { id: string; failed: number; open: number }) => [w.id, w.failed, w.open]), [[walkId, 2, 2]]);
+    });
+
+    test("a walk's photos are kept: never reused elsewhere, never cleaned up; the walk can't be changed or erased", async () => {
+      await cleanupOrphanPhotos(() => {});
+      assert.ok(await one(`SELECT 1 FROM photos WHERE id = $1`, [oldPhoto]), "the 30-day-old photo on the walk is kept");
+      // A truck inspection answering today's checklist, trying to use the walk's photo.
+      const truckForm = (await inject("GET", "/form-config", { cookie: crewCookie })).json();
+      const reuse = await inject("POST", "/inspections", { cookie: supCookie, body: submitBody({
+        checklist_as_of: truckForm.as_of, photos: [{ id: oldPhoto, caption: null }],
+        items: truckForm.checklist.filter((c: { section: string }) => c.section !== "trailer")
+          .map((c: { id: number }) => ({ checklist_item_id: c.id, result: "ok" })),
+      }) });
+      assert.equal(reuse.statusCode, 422);
+      assert.equal(reuse.json().details.code, "photos_missing");
+      await assert.rejects(q(`DELETE FROM photos WHERE id = $1`, [oldPhoto]));
+      await assert.rejects(q(`UPDATE yard_inspections SET comments = 'changed' WHERE id = $1`, [walkId]));
+      await assert.rejects(q(`DELETE FROM yard_inspections WHERE id = $1`, [walkId]));
+      await assert.rejects(q(`UPDATE yard_inspection_items SET note = 'changed' WHERE yard_inspection_id = $1`, [walkId]));
+      await assert.rejects(q(`DELETE FROM yard_inspection_items WHERE yard_inspection_id = $1`, [walkId]));
+      await assert.rejects(q(`DELETE FROM yard_checklist_items`));
+      await assert.rejects(q(`DELETE FROM yards`));
+    });
+
+    test("findings stay open, on the board and home screen, until a supervisor resolves them with a note", async () => {
+      const findings = (await inject("GET", "/yard-findings", { cookie: shopCookie })).json();
+      assert.deepEqual(findings.map((f: { note: string }) => f.note).sort(), ["Rags in an open bucket", "Shop extinguisher tag expired"]);
+      assert.equal(findings[0].yard_name, "AZ yard");
+      assert.equal((await inject("GET", "/yard-findings", { cookie: crewCookie })).statusCode, 403);
+      const rag = findings.find((f: { note: string }) => f.note === "Rags in an open bucket");
+      assert.equal(rag.photo_ids.length, 1);
+      assert.equal((await inject("POST", `/yard-findings/${rag.id}/resolve`, { cookie: shopCookie, body: { note: "x" } })).statusCode, 403);
+      assert.equal((await inject("POST", `/yard-findings/${rag.id}/resolve`, { cookie: supCookie, body: { note: " " } })).statusCode, 400);
+      assert.equal((await inject("POST", `/yard-findings/${rag.id}/resolve`, { cookie: supCookie, body: { note: "Metal can bought" } })).statusCode, 200);
+      assert.equal((await inject("POST", `/yard-findings/${rag.id}/resolve`, { cookie: supCookie, body: { note: "again" } })).statusCode, 409);
+      assert.equal((await inject("GET", "/yard-findings", { cookie: supCookie })).json().length, 1);
+      assert.equal((await inject("GET", "/yards", { cookie: supCookie })).json()[0].open_findings, 1);
+      const item = (await inject("GET", `/yard-inspections/${walkId}`, { cookie: supCookie })).json().items
+        .find((i: { id: number }) => i.id === rag.id);
+      assert.equal(item.resolution_note, "Metal can bought");
+      assert.equal(item.resolved_by_name, "Sam Super");
+    });
+
+    test("the walk PDF: yard, date, every item with OK or Repair, notes, how findings were resolved, signature and photos", async () => {
+      const { loadYardInspection } = await import("../src/routes/yard.ts");
+      const { yardPdfHtml } = await import("../src/yard-pdf.ts");
+      const html = await yardPdfHtml((await loadYardInspection(walkId))!);
+      for (const s of ["Yard Inspection", "AZ yard", "Fire safety", "Fire extinguishers present, charged and tagged",
+        "Shop extinguisher tag expired", "Resolved", "Metal can bought", "Hot day, piles low", "Sam Super"]) assert.ok(html.includes(s), s);
+      assert.equal((html.match(/<img src="data:image\/png;base64,/g) || []).length >= 1, true, "signature");
+      assert.match(html, /<img src="data:image\/jpeg;base64,/, "the photo");
+      const pdf = await inject("GET", `/yard-inspections/${walkId}/pdf`, { cookie: supCookie });
+      assert.equal(pdf.statusCode, 200);
+      assert.equal(pdf.rawPayload.subarray(0, 4).toString(), "%PDF");
+      assert.equal((await inject("GET", `/yard-inspections/${walkId}/pdf`, { cookie: shopCookie })).statusCode, 403);
+    });
+
+    test("the yard checklist is edited like the truck one, without touching it; an open walk still sends", async () => {
+      const truckBefore = (await inject("GET", "/form-config", { cookie: crewCookie })).json().checklist.length;
+      const before = await config();
+      const add = await inject("POST", "/admin/yard-checklist", { cookie: adminCookie, body: { section: "fire", label: "Hose reel reachable" } });
+      assert.equal(add.statusCode, 201, add.body);
+      assert.equal((await inject("POST", "/admin/yard-checklist", { cookie: adminCookie, body: { section: "exterior", label: "X" } })).statusCode, 400);
+      assert.equal((await inject("GET", "/admin/yard-checklist", { cookie: supCookie })).statusCode, 403);
+      const ed = (await inject("GET", "/admin/yard-checklist", { cookie: adminCookie })).json();
+      assert.equal(ed.changes[0].new_label, "Hose reel reachable");
+      assert.equal((await inject("GET", "/form-config", { cookie: crewCookie })).json().checklist.length, truckBefore, "the truck checklist is unchanged");
+
+      const open = await inject("POST", "/yard-inspections", { cookie: supCookie,
+        body: walkBody(before.checklist, {}, { checklist_as_of: before.as_of, inspection_date: "2026-11-16" }) });
+      assert.equal(open.statusCode, 201, open.body);
+      const old = await inject("POST", "/yard-inspections", { cookie: supCookie, body: walkBody(before.checklist) });
+      assert.equal(old.statusCode, 422);
+      assert.deepEqual(old.json().details.missing, [add.json().id]);
+      assert.equal((await inject("POST", `/admin/yard-checklist/${add.json().id}/retire`, { cookie: adminCookie, body: {} })).statusCode, 200);
+    });
+  });
 }

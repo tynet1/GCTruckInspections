@@ -135,6 +135,8 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - Repair tickets (010) can't be deleted or changed, only voided once with a reason; the repairs on a ticket never change.
 - Checklist items (011) are retired, never deleted, and every checklist change is kept; editing the checklist never
   changes a submitted inspection or bounces one that's being filled in.
+- Yard walks (012) are read-only once submitted and never deleted; only a finding's resolution is recorded later. Yards,
+  yard checklist items and their change history can't be deleted either, and a walk's photos are protected like any other.
 
 ## 5. Business rules
 
@@ -226,6 +228,18 @@ PATCH /admin/checklist/:id {label}
 POST /admin/checklist/:id/move {direction: "up" | "down"}
 POST /admin/checklist/:id/retire, /restore
 GET  /form-config now also returns as_of; the phone sends it back as checklist_as_of with the inspection.
+/admin/yard-checklist: the same five calls for the yard checklist.
+
+Yard walks (built):
+GET  /yards                          -> yards with walked_today, last_date, open_findings     supervisor, shop, admin
+GET  /yard-config                    -> {sections, checklist, as_of}                          supervisor+
+POST /yard-inspections {client_id, yard_id, inspection_date, inspector_name, comments, checklist_as_of, items, photos, signature}
+                                     -> {id, failed} (200 + duplicate on a retry)              supervisor+
+GET  /yards/:id/inspections          -> the yard's walks, newest first                         supervisor, shop, admin
+GET  /yard-inspections/:id           -> walk, items (with resolutions), photos                 supervisor, shop, admin
+GET  /yard-inspections/:id/signature, /pdf (supervisor+)
+GET  /yard-findings                  -> open findings, oldest first                            supervisor, shop, admin
+POST /yard-findings/:id/resolve {note}                                                         supervisor+
 
 Maintenance log (built):
 GET  /service-config                -> {categories}                          shop, supervisor, admin
@@ -332,7 +346,21 @@ POST /service-logs/:id/void         {reason}                                    
      An inspection, its detail screen and its PDF show the date that was on file when it was submitted; one set while
      signing it off shows on that inspection. Tyler (2026-11-17): crew don't enter it, and plate and insurance don't get the
      same update.
-   - **Yard inspections (2026-11-17, after the yard fire on 11/13/26).** A walk-through of a yard on its own checklist,
+   - **Yard inspections (built 2026-11-17, migration 012; asked for after the yard fire on 11/13/26).** Built as answered below:
+     - **Who and where:** supervisors and admins walk a yard (the AZ yard for now; yards are a table, so more can be added);
+       the shop can see yards, walks and findings. Menu → Yard walks, or the yard card on the home screen.
+     - **The walk:** date, inspector (the signed-in name), the yard checklist in four sections (Fire safety; Fuel, oil &
+       chemicals; Equipment & charging; Access & security) with OK / Repair, a note for each Repair, photos (on a problem or
+       general), comments and a finger signature. Drafts are saved on the phone and queued like truck inspections, so a
+       walk saved with no signal uploads by itself later (checked: saved with the server down, sent when it came back).
+     - **Findings:** each Repair stays open until a supervisor resolves it with a note: on the yard page, the walk, and the
+       top of the repairs board ("Yard findings"). Supervisors' home screen shows each yard with "Walked today" or "Not
+       walked today" and its open findings, with a red banner while any are open (the in-app notice; phone push later).
+     - **Records:** a walk is read-only once submitted (database triggers); only a finding's resolution is recorded later.
+       Photos on a walk are never reused elsewhere or cleaned up. Each walk has a PDF (supervisors).
+     - **The checklist** starts from the fire-review list below (12 items) and is edited in Admin → Checklist → Yard walk,
+       the same way as the truck checklist (011), with the same rule that a walk opened before a change still sends.
+     Original plan: a walk-through of a yard on its own checklist,
      with the same OK / Repair, notes, photos and signature as a truck inspection. Each finding becomes an open item on the
      repairs board until someone resolves it with a note. A fire-focused starting checklist to confirm: extinguishers present,
      charged and tagged; fuel and oil in closed cans or a cabinet, away from heat; oily rags in a closed metal can; green-waste
@@ -373,10 +401,10 @@ POST /service-logs/:id/void         {reason}                                    
      erasing. Tyler's answers (2026-11-17): **vehicle incidents only** for now; **supervisors** file them and **supervisors**
      are told right away; damage from an incident **goes into the truck's "Damage on file" and repair items**. Still waiting
      on a sample form.
-6. **Build order (Tyler left it to Claude, 2026-11-17):** PDF repair ticket (fully answered, small) → checklist editor
-   with inspection types and equipment/trailers as assets (the shared foundation) → yard inspections (daily, AZ) →
-   equipment inspections → fleet management (status, trailers, supervisor reminders; lease details when Tyler has them)
-   → incident reports once a sample form arrives. Phase 3 (code review, burn-in) after those.
+6. **Build order (Tyler left it to Claude, 2026-11-17):** PDF repair ticket (built) → checklist editor (built) → yard
+   inspections (built) → equipment inspections, with equipment and trailers as assets → fleet management (status,
+   trailers, supervisor reminders; lease details when Tyler has them) → incident reports once a sample form arrives.
+   Phase 3 (code review, burn-in) after those.
 
 ## 10. Acceptance checklist for MVP
 

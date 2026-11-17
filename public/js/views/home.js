@@ -5,6 +5,7 @@ import { allDrafts } from "../drafts.js";
 import { atLeast, can, errorHtml, homeHeader, stale, state } from "../ui.js";
 import { $, daysAgo, esc, fmtDate, vehicleInfo } from "../util.js";
 import { inspectionRow, serviceRow } from "./common.js";
+import { yardPills } from "./yard.js";
 
 let query = "";
 
@@ -25,22 +26,37 @@ export async function render(app) {
   app.innerHTML = `
     <input class="search" id="q" type="search" placeholder="Search truck, plate, VIN…" value="${esc(query)}" autocomplete="off" aria-label="Search trucks">
     ${can.seeService() ? `<a class="secondary wide" id="rbLink" href="#/repairs" style="margin-top:12px">Repairs board</a>` : ""}
+    <div id="yardBox"></div>
     <div id="review"></div>
     <h2>Pick a truck</h2><div id="trucks"><div class="empty">Loading trucks…</div></div>
     ${recentBlocks()}`;
 
-  const [vehicles, recent, drafts, unreviewed, recentSvc] = await Promise.all([
+  const [vehicles, recent, drafts, unreviewed, recentSvc, yards] = await Promise.all([
     api("/vehicles").catch((e) => e),
     api("/inspections?limit=15").catch((e) => e),
     allDrafts().catch(() => []),
     atLeast("supervisor") ? api("/inspections?status=submitted&limit=100").catch((e) => e) : null,
     can.seeService() ? api("/service-logs?limit=10").catch((e) => e) : null,
+    can.seeService() ? api("/yards").catch(() => null) : null,
   ]);
   if (stale(nav)) return;
   if (recentSvc) {
     $("#recentSvc").innerHTML = recentSvc instanceof Error
       ? errorHtml(recentSvc)
       : recentSvc.length ? recentSvc.map((s) => serviceRow(s, { showTruck: true })).join("") : `<div class="empty">No maintenance logged yet.</div>`;
+  }
+
+  // The yard: a reminder until today's walk is done, and open findings until they're resolved.
+  if (yards?.length) {
+    const sup = atLeast("supervisor");
+    const due = yards.filter((y) => sup && !y.walked_today);
+    const open = yards.filter((y) => y.open_findings);
+    $("#yardBox").innerHTML = (due.length || open.length ? `<div class="banner ${open.length ? "err" : "info"}">${[
+      ...due.map((y) => `<b>${esc(y.name)}:</b> today's walk isn't done yet.`),
+      ...open.map((y) => `<b>${esc(y.name)}:</b> ${y.open_findings} open finding${y.open_findings === 1 ? "" : "s"}.`),
+    ].join("<br>")}</div>` : "")
+      + `<div class="card list">${yards.map((y) => `<a class="item" href="#/yard/${y.id}"><span class="grow"><b>${esc(y.name)}</b>
+        <span class="small muted clip">${y.last_date ? `Last walk ${fmtDate(y.last_date)}` : "No walks yet"}</span></span>${yardPills(y)}</a>`).join("")}</div>`;
   }
 
   const rb = $("#rbLink");

@@ -34,15 +34,24 @@ export async function render(app, tab = "users", editId = null) {
 // ---------- Checklist ----------
 
 const CHANGE_WORDS = { added: "Added", renamed: "Reworded", moved: "Moved", retired: "Retired", restored: "Restored" };
+// Which checklist the tab shows; both are edited the same way.
+const CHECKLISTS = {
+  truck: { label: "Truck inspection", api: "/admin/checklist", title: "Inspection checklist" },
+  yard: { label: "Yard walk", api: "/admin/yard-checklist", title: "Yard walk checklist" },
+};
+let ckKind = "truck";
 
 /** The inspection checklist: add, reword, reorder, retire and restore items. Changes apply to new inspections only. */
 async function checklistTab(nav) {
-  const data = await api("/admin/checklist");
+  const cl = CHECKLISTS[ckKind];
+  const data = await api(cl.api);
   if (stale(nav)) return;
   const reload = () => checklistTab(nav);
   const title = Object.fromEntries(data.sections.map((s) => [s.key, s.title]));
   const box = $("#adm");
-  let h = `<h2 style="margin:16px 4px 4px">Inspection checklist</h2>
+  let h = `<div class="chips" id="ck-kind" style="margin-top:14px">${Object.entries(CHECKLISTS).map(([k, c]) =>
+      `<button type="button" data-kind="${k}" class="${k === ckKind ? "on" : ""}">${esc(c.label)}</button>`).join("")}</div>
+    <h2 style="margin:16px 4px 4px">${esc(cl.title)}</h2>
     <p class="small muted" style="margin:0 4px 6px">Changes apply to new inspections. Submitted inspections keep the items and
       wording they had, and a form already open on a phone still sends without the items added after it was opened.</p>`;
   for (const s of data.sections) {
@@ -67,6 +76,11 @@ async function checklistTab(nav) {
         <span class="muted">(${esc(title[c.section] || c.section)})</span></li>`).join("")}</ul></details>`;
   }
   box.innerHTML = h;
+  box.querySelectorAll("[data-kind]").forEach((b) => (b.onclick = () => {
+    if (b.dataset.kind === ckKind) return;
+    ckKind = b.dataset.kind;
+    reload();
+  }));
 
   const run = async (b, fn) => {
     b.disabled = true;
@@ -74,22 +88,22 @@ async function checklistTab(nav) {
     if (!stale(nav)) reload();
   };
   box.querySelectorAll("[data-move]").forEach((b) => (b.onclick = () => run(b, () =>
-    api(`/admin/checklist/${b.dataset.id}/move`, { method: "POST", body: { direction: b.dataset.move } }))));
+    api(`${cl.api}/${b.dataset.id}/move`, { method: "POST", body: { direction: b.dataset.move } }))));
   box.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = () => run(b, async () => {
-    await api(`/admin/checklist/${b.dataset.restore}/restore`, { method: "POST", body: {} });
+    await api(`${cl.api}/${b.dataset.restore}/restore`, { method: "POST", body: {} });
     toast("Restored to the end of its section ✓");
   })));
   box.querySelectorAll("[data-add]").forEach((b) => (b.onclick = async () => {
-    if (await checklistItemEditor(null, b.dataset.add, data.sections) && !stale(nav)) reload();
+    if (await checklistItemEditor(null, b.dataset.add, data.sections, cl.api) && !stale(nav)) reload();
   }));
   box.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = async () => {
     const it = data.items.find((x) => String(x.id) === b.dataset.edit);
-    if (await checklistItemEditor(it, it.section, data.sections) && !stale(nav)) reload();
+    if (await checklistItemEditor(it, it.section, data.sections, cl.api) && !stale(nav)) reload();
   }));
 }
 
 /** Add an item (item null) or reword / retire one. Resolves true when something changed. */
-function checklistItemEditor(item, section, sections) {
+function checklistItemEditor(item, section, sections, base) {
   return new Promise((resolve) => {
     const m = modal(`<h3>${item ? "Edit checklist item" : "Add checklist item"}</h3>
       ${item ? `<p class="small muted" style="margin-top:-8px">${esc(sections.find((s) => s.key === section)?.title)} · answered on
@@ -113,8 +127,8 @@ function checklistItemEditor(item, section, sections) {
       if (item && label === item.label) return done(false);
       e.target.disabled = true;
       try {
-        if (item) await api(`/admin/checklist/${item.id}`, { method: "PATCH", body: { label } });
-        else await api("/admin/checklist", { method: "POST", body: { section: m.querySelector("#ck-sec").value, label } });
+        if (item) await api(`${base}/${item.id}`, { method: "PATCH", body: { label } });
+        else await api(base, { method: "POST", body: { section: m.querySelector("#ck-sec").value, label } });
         toast(item ? "Saved ✓" : "Added at the end of the section ✓");
         done(true);
       } catch (ex) {
@@ -126,7 +140,7 @@ function checklistItemEditor(item, section, sections) {
     if (rt) rt.onclick = async () => {
       if (!(await confirmBox(`Retire “${item.label}”? It comes off the form for new inspections. Inspections that already have it keep it, and you can restore it later.`, "Retire", { danger: true }))) return;
       try {
-        await api(`/admin/checklist/${item.id}/retire`, { method: "POST", body: {} });
+        await api(`${base}/${item.id}/retire`, { method: "POST", body: {} });
         toast("Retired ✓");
         done(true);
       } catch (ex) {

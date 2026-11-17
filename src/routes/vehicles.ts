@@ -134,7 +134,7 @@ async function markRepaired(markId: number, userId: number, body: unknown) {
   if (dup) return { id: dup.id, duplicate: true };
   const ready = await q(
     `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
-        AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL`,
+        AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
     [photoIds, userId],
   );
   const missing = photoIds.filter((id) => !ready.some((r) => r.id === id));
@@ -161,7 +161,7 @@ async function markRepaired(markId: number, userId: number, body: unknown) {
     for (const p of photoIds) {
       const r = await c.query(
         `UPDATE photos SET damage_repair_id = $2 WHERE id = $1 AND uploaded_by = $3
-            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL`,
+            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
         [p, id, userId],
       );
       if (r.rowCount !== 1) throw conflict("A photo couldn't be attached. Add it again.");
@@ -205,7 +205,7 @@ export async function updateRegistration(vehicleId: number, userId: number, body
   if (photoIds.length) {
     const ready = await q(
       `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
-          AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL`,
+          AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
       [photoIds, userId],
     );
     const missing = photoIds.filter((id) => !ready.some((r) => r.id === id));
@@ -240,7 +240,7 @@ export async function updateRegistration(vehicleId: number, userId: number, body
     for (const p of photoIds) {
       const r = await c.query(
         `UPDATE photos SET registration_change_id = $2 WHERE id = $1 AND uploaded_by = $3
-            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL`,
+            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
         [p, id, userId],
       );
       if (r.rowCount !== 1) throw conflict("A photo couldn't be attached. Add it again.");

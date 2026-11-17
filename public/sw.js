@@ -23,6 +23,7 @@ const SHELL_FILES = [
   "/js/svc.js",
   "/js/ui.js",
   "/js/util.js",
+  "/js/yardq.js",
   "/js/zip.js",
   "/js/views/admin.js",
   "/js/views/common.js",
@@ -38,6 +39,9 @@ const SHELL_FILES = [
   "/js/views/signin.js",
   "/js/views/tickets.js",
   "/js/views/truck.js",
+  "/js/views/yard.js",
+  "/js/views/yard-detail.js",
+  "/js/views/yard-form.js",
   // Every bundled diagram, so a truck's form works offline even if it was never opened before.
   "/diagrams/az018-truck.jpg",
   "/diagrams/trailer.jpg",
@@ -102,7 +106,7 @@ self.addEventListener("fetch", (event) => {
 
   if (p.startsWith("/api/")) {
     if (/\/pdf$/.test(p) || p === "/api/auth/logout") return;
-    if (/^\/api\/photos\/|^\/api\/inspections\/[^/]+\/signature\/|^\/api\/diagrams\/\d+\/image$/.test(p)
+    if (/^\/api\/photos\/|^\/api\/inspections\/[^/]+\/signature\/|^\/api\/yard-inspections\/[^/]+\/signature$|^\/api\/diagrams\/\d+\/image$/.test(p)
       || (p === "/api/branding/logo" && url.searchParams.has("v"))) {
       event.respondWith(cacheFirst(req, RUNTIME));
       return;

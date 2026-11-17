@@ -14,8 +14,8 @@ export function serviceRow(s, { showTruck = false } = {}) {
     </span></a>`;
 }
 
-/** Supervisor marks a repair item as fixed. Resolves true when saved. */
-export function resolveRepair(itemId, label) {
+/** Supervisor marks a repair item (or, with `path`, a yard finding) as fixed. Resolves true when saved. */
+export function resolveRepair(itemId, label, path = `/inspection-items/${itemId}/resolve`) {
   return new Promise((resolve) => {
     const m = modal(`<h3>Mark repair resolved</h3>
       <p class="muted" style="margin-top:-6px">${esc(label)}</p>
@@ -32,7 +32,7 @@ export function resolveRepair(itemId, label) {
       if (!note) { m.querySelector("#rerr").innerHTML = `<div class="banner err">Add a short note about the fix.</div>`; return; }
       e.target.disabled = true;
       try {
-        await api(`/inspection-items/${itemId}/resolve`, { method: "POST", body: { note } });
+        await api(path, { method: "POST", body: { note } });
         m.remove();
         toast("Repair marked resolved ✓");
         resolve(true);

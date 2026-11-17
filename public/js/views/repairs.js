@@ -5,9 +5,11 @@ import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, $$, esc, fmtDate, lightbox, vehicleInfo } from "../util.js";
 import { repairButtons, resolveRepair, SECTION_TITLES } from "./common.js";
 import { makeTicket, openTicket, ticketPills } from "./tickets.js";
+import { findingItem, wireFindings } from "./yard.js";
 
 let view = { truck: "", order: "truck" };
 let list = [];
+let findings = [];
 let nav = 0;
 
 export async function render(app, truckId) {
@@ -16,7 +18,7 @@ export async function render(app, truckId) {
   setHeader({ title: "Repairs board", back: truckId ? `#/truck/${truckId}` : "#/" });
   app.innerHTML = `<div class="empty">Loading…</div>`;
   try {
-    list = await api("/repairs");
+    [list, findings] = await Promise.all([api("/repairs"), api("/yard-findings").catch(() => [])]);
   } catch (e) {
     if (!stale(nav)) app.innerHTML = errorHtml(e);
     return;
@@ -64,6 +66,10 @@ function draw(app) {
       <a class="link" style="display:inline-flex;align-items:center;min-height:44px;margin-top:4px" href="#/csv?what=repairs${
         view.truck ? `&truck=${view.truck}` : ""}">Download CSV</a></div>`;
 
+  if (findings.length && !view.truck) {
+    h += `<div class="h2row"><h2>Yard findings · ${findings.length}</h2><a class="link" href="#/yard">Yard walks</a></div>
+      <div class="card"><ul class="repairlist">${findings.map((f) => findingItem(f, { showYard: true })).join("")}</ul></div>`;
+  }
   if (!shown.length) {
     h += `<div class="card empty">No open repairs${view.truck ? " on this truck" : ""}. ✓</div>`;
   } else if (view.order === "oldest") {
@@ -84,6 +90,10 @@ function draw(app) {
   $("#rb-truck").onchange = (e) => { view.truck = e.target.value; draw(app); };
   $$("#rb-order [data-order]").forEach((b) => (b.onclick = () => { view.order = b.dataset.order; draw(app); }));
   app.querySelectorAll("[data-lb]").forEach((img) => (img.onclick = () => lightbox(img.src, img.dataset.cap)));
+  wireFindings(app, async () => {
+    findings = await api("/yard-findings").catch(() => findings);
+    if (!stale(nav)) draw(app);
+  });
   app.querySelectorAll("[data-ticket-truck]").forEach((b) => (b.onclick = async () => {
     const rs = list.filter((r) => String(r.vehicle_id) === b.dataset.ticketTruck);
     const truck = { id: Number(b.dataset.ticketTruck), truck_code: rs[0]?.truck_code };
