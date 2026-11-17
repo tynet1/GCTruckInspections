@@ -4,6 +4,7 @@ import { config } from "../config.ts";
 import { one, q } from "../db.ts";
 import { bad, conflict, HttpError, notFound, UUID_RE, uuidParam } from "../http.ts";
 import { files, imageType, newKey } from "../storage.ts";
+import { UNATTACHED } from "../photo-owners.ts";
 
 export default async function photoRoutes(app: FastifyInstance) {
   /**
@@ -78,7 +79,7 @@ export default async function photoRoutes(app: FastifyInstance) {
 export async function cleanupOrphanPhotos(log: (m: string) => void): Promise<void> {
   const rows = await q(
     `DELETE FROM photos
-      WHERE inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL
+      WHERE ${UNATTACHED}
         AND created_at < now() - make_interval(days => $1)
      RETURNING file_path`,
     [config.photo.orphanDays],

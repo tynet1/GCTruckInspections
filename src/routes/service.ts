@@ -6,6 +6,7 @@ import type { PoolClient } from "pg";
 import { requireRole } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { bad, conflict, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE } from "../http.ts";
+import { isUnattached, OWNER_COLUMNS, UNATTACHED } from "../photo-owners.ts";
 
 export const CATEGORIES: Record<string, string> = {
   oil_change: "Oil change",
@@ -171,11 +172,11 @@ async function checkPhotos(photos: { id: string }[], userId: number, entryId: nu
   if (!photos.length) return;
   const ids = photos.map((p) => p.id);
   const found = await q(
-    `SELECT id, inspection_id, service_log_id, damage_repair_id, registration_change_id, yard_inspection_id, uploaded_by FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
+    `SELECT id, uploaded_by, ${OWNER_COLUMNS} FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
   const ok = new Set(found
-    .filter((f) => f.inspection_id == null && (f.service_log_id == null
-      ? f.damage_repair_id == null && f.registration_change_id == null && f.yard_inspection_id == null && f.uploaded_by === userId
-      : f.service_log_id === entryId))
+    // Free photos this user uploaded, or ones already on this entry (when editing it).
+    .filter((f) => isUnattached(f, ["service_log_id"])
+      && (f.service_log_id == null ? f.uploaded_by === userId : f.service_log_id === entryId))
     .map((f) => f.id));
   const notReady = ids.filter((id) => !ok.has(id));
   if (notReady.length) {
@@ -188,7 +189,7 @@ async function attachPhotos(c: PoolClient, entryId: number, photos: EntryPhoto[]
   for (const p of photos) {
     const r = await c.query(
       `UPDATE photos SET service_log_id = $2, caption = $3, damage_repair_id = $5
-        WHERE id = $1 AND uploaded_by = $4 AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
+        WHERE id = $1 AND uploaded_by = $4 AND ${UNATTACHED}`,
       [p.id, entryId, p.caption, userId, p.damage_mark_id ? repairOf.get(p.damage_mark_id) ?? null : null],
     );
     if (r.rowCount === 1) continue;

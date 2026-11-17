@@ -3,6 +3,7 @@ import { requireRole, requireUser } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { defaultDiagram, diagramUrl, readDiagram } from "../diagrams.ts";
 import { bad, conflict, DATE_RE, HttpError, idParam, isValidDate, notFound, obj, reqStr, str, UUID_RE } from "../http.ts";
+import { UNATTACHED } from "../photo-owners.ts";
 
 const VEHICLE_COLS = `
   vs.id, vs.truck_code, vs.unit, vs.vin, vs.plate, vs.year, vs.make, vs.model,
@@ -134,7 +135,7 @@ async function markRepaired(markId: number, userId: number, body: unknown) {
   if (dup) return { id: dup.id, duplicate: true };
   const ready = await q(
     `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
-        AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
+        AND ${UNATTACHED}`,
     [photoIds, userId],
   );
   const missing = photoIds.filter((id) => !ready.some((r) => r.id === id));
@@ -161,7 +162,7 @@ async function markRepaired(markId: number, userId: number, body: unknown) {
     for (const p of photoIds) {
       const r = await c.query(
         `UPDATE photos SET damage_repair_id = $2 WHERE id = $1 AND uploaded_by = $3
-            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
+            AND ${UNATTACHED}`,
         [p, id, userId],
       );
       if (r.rowCount !== 1) throw conflict("A photo couldn't be attached. Add it again.");
@@ -205,7 +206,7 @@ export async function updateRegistration(vehicleId: number, userId: number, body
   if (photoIds.length) {
     const ready = await q(
       `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
-          AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
+          AND ${UNATTACHED}`,
       [photoIds, userId],
     );
     const missing = photoIds.filter((id) => !ready.some((r) => r.id === id));
@@ -240,7 +241,7 @@ export async function updateRegistration(vehicleId: number, userId: number, body
     for (const p of photoIds) {
       const r = await c.query(
         `UPDATE photos SET registration_change_id = $2 WHERE id = $1 AND uploaded_by = $3
-            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
+            AND ${UNATTACHED}`,
         [p, id, userId],
       );
       if (r.rowCount !== 1) throw conflict("A photo couldn't be attached. Add it again.");

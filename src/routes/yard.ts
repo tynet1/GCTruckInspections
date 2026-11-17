@@ -10,6 +10,7 @@ import { renderHtmlToPdf } from "../pdf.ts";
 import { decodePngDataUrl, files, newKey } from "../storage.ts";
 import { yardPdfHtml } from "../yard-pdf.ts";
 import { YARD_SECTIONS } from "./checklist.ts";
+import { UNATTACHED } from "../photo-owners.ts";
 
 interface ItemIn { checklist_item_id: number; result: "ok" | "repair"; note: string | null }
 interface PhotoIn { id: string; caption: string | null; checklist_item_id: number | null }
@@ -119,8 +120,7 @@ export async function submitYardInspection(input: YardSubmit, userId: number) {
     const ids = input.photos.map((p) => p.id);
     const found = await q(
       `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
-          AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL
-          AND yard_inspection_id IS NULL`,
+          AND ${UNATTACHED}`,
       [ids, userId],
     );
     const ok = new Set(found.map((f) => f.id));
@@ -153,8 +153,7 @@ export async function submitYardInspection(input: YardSubmit, userId: number) {
       for (const p of input.photos) {
         const r = await c.query(
           `UPDATE photos SET yard_inspection_id = $2, yard_inspection_item_id = $3, caption = $4
-            WHERE id = $1 AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL
-              AND registration_change_id IS NULL AND yard_inspection_id IS NULL`,
+            WHERE id = $1 AND ${UNATTACHED}`,
           [p.id, id, p.checklist_item_id ? itemIds.get(p.checklist_item_id) ?? null : null, p.caption],
         );
         if (r.rowCount !== 1) throw conflict("A photo was attached to something else. Remove it and try again.");
