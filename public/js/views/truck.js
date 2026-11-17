@@ -282,7 +282,7 @@ function undoRepaired(m) {
 }
 
 function serviceSection(v, svc, svcDraft) {
-  let h = `<h2>Maintenance</h2>`;
+  let h = `<div class="h2row"><h2>Maintenance</h2><a class="link" href="#/csv?what=maintenance&truck=${v.id}">Download CSV</a></div>`;
   if (svcDraft?.status === "queued") {
     h += `<div class="banner info"><b>Maintenance entry saved on phone, not yet uploaded.</b><br>${esc(svcDraft.lastError || "Uploading…")}.
       It will send by itself when signal returns.<div style="margin-top:8px"><button class="secondary" id="svcSend">Try upload now</button></div></div>`;

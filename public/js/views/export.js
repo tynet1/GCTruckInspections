@@ -3,7 +3,7 @@
 // The PDFs are fetched one at a time (two in flight), so a weak signal only retries one PDF, not the batch.
 import { api, apiFile, withRetry } from "../api.js";
 import { errorHtml, setHeader, stale, state } from "../ui.js";
-import { $, $$, esc, fmtDate, modal, toast, today } from "../util.js";
+import { $, $$, DATE_RANGES as RANGES, dateRange as range, esc, fmtDate, modal, saveBlob, toast, today } from "../util.js";
 import { makeZip, uniqueName } from "../zip.js";
 import { inspectionPills, inspectionTitle } from "./common.js";
 
@@ -22,17 +22,6 @@ export function leave() {
   job = null;
 }
 
-const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const RANGES = [["7", "Last 7 days"], ["month", "This month"], ["last", "Last month"], ["", "Any date"]];
-
-function range(key) {
-  const n = new Date();
-  if (key === "7") return { from: iso(new Date(n.getFullYear(), n.getMonth(), n.getDate() - 6)), to: today() };
-  if (key === "month") return { from: iso(new Date(n.getFullYear(), n.getMonth(), 1)), to: today() };
-  if (key === "last") return { from: iso(new Date(n.getFullYear(), n.getMonth() - 1, 1)), to: iso(new Date(n.getFullYear(), n.getMonth(), 0)) };
-  return { from: "", to: "" };
-}
-
 export async function render(app, truckId) {
   nav = state.nav;
   selected = new Map();
@@ -44,7 +33,8 @@ export async function render(app, truckId) {
   if (stale(nav)) return;
 
   app.innerHTML = `
-    <p class="small muted" style="margin:14px 4px 0">Tick the inspections to export. Each one becomes its own PDF, the same as Export PDF on an inspection.</p>
+    <p class="small muted" style="margin:14px 4px 0">Tick the inspections to export. Each one becomes its own PDF, the same as Export PDF on an inspection.
+      Want a spreadsheet instead? <a href="#/csv?what=inspections${truckId ? `&truck=${truckId}` : ""}">Download CSV</a></p>
     <div class="card" style="margin-top:10px">
       <label class="f" for="x-truck">Truck</label>
       <select class="t" id="x-truck"><option value="">All trucks</option>${vehicles.map((v) =>
@@ -208,18 +198,6 @@ async function runExport(ids, info, done = new Map()) {
 }
 
 const size = (b) => (b < 1048576 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1048576).toFixed(1)} MB`);
-
-function saveBlob(blob, name) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.hidden = true;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
 
 async function showResult(ids, info, done, failed) {
   const used = new Set();

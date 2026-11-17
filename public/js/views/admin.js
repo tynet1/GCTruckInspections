@@ -135,7 +135,8 @@ async function trucksTab(nav, editId) {
   const box = $("#adm");
   box.innerHTML = `<div class="spread" style="margin:16px 4px 8px"><h2 style="margin:0">Trucks (${vehicles.filter((v) => v.active).length} active)</h2>
       <button class="primary" id="addTruck">+ Add truck</button></div>
-    <p class="small muted" style="margin:0 4px 10px">Tap a truck to change its details, registration, trailer or diagram.</p>
+    <p class="small muted" style="margin:0 4px 10px">Tap a truck to change its details, registration, trailer or diagram.
+      <a href="#/csv?what=trucks">Download CSV</a></p>
     <div class="card list">${vehicles.map((v) => `<button class="item" data-veh="${v.id}">
       <span><b>${esc(v.truck_code)}</b> ${esc(vehicleInfo(v))}<br><span class="small muted">${esc(v.plate || "no plate")} ·
         ${v.pulls_trailer ? `Trailer: ${esc(v.trailer_type || "yes")}` : "No trailer"}</span></span>

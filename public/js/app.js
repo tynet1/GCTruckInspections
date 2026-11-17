@@ -7,6 +7,7 @@ import { atLeast, can, homeHeader, state } from "./ui.js";
 import { $, esc, modal, toast } from "./util.js";
 import * as admin from "./views/admin.js";
 import * as detail from "./views/detail.js";
+import * as csvView from "./views/csv.js";
 import * as exportView from "./views/export.js";
 import * as form from "./views/form.js";
 import * as repairsBoard from "./views/repairs.js";
@@ -24,6 +25,7 @@ const routes = [
   { re: /^#\/service\/(new|edit)\/(\d+)(?:\?(fix|fixdmg)=(\d+))?$/, view: serviceForm, allow: () => can.logService() },
   { re: /^#\/service\/(\d+)$/, view: serviceDetail, allow: () => can.seeService() },
   { re: /^#\/export(?:\?truck=(\d+))?$/, view: exportView, role: "supervisor" },
+  { re: /^#\/csv(?:\?([\w=&-]*))?$/, view: csvView, allow: () => can.seeService() },
   { re: /^#\/repairs(?:\?truck=(\d+))?$/, view: repairsBoard, allow: () => can.seeService() },
   { re: /^#\/admin(?:\/(users|trucks|branding|deleted))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
@@ -94,6 +96,7 @@ export function openMenu() {
     <div style="display:grid;gap:10px">
       ${can.seeService() ? `<a class="secondary" href="#/repairs" data-close>Repairs board</a>` : ""}
       ${atLeast("supervisor") ? `<a class="secondary" href="#/export" data-close>Export PDFs</a>` : ""}
+      ${can.seeService() ? `<a class="secondary" href="#/csv" data-close>Download CSV (spreadsheet)</a>` : ""}
       ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks, branding &amp; deleted</a>` : ""}
       <button class="secondary danger" id="mSignOut">Sign out</button>
       <button class="secondary" data-close>Close</button>

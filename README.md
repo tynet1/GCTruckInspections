@@ -34,7 +34,8 @@ on the phone and upload when signal returns.
 | Archive or delete inspections (delete = recoverable forever, admin only, reason required); database refuses to erase inspections | done |
 | Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve | done |
 | Registration expiration: supervisors update it from the form, sign-off or truck page; full history; PDFs keep the date on file | done |
-| CSV export, checklist editor | not started |
+| CSV export: inspections, repairs, maintenance log, trucks, with truck/date filters | done |
+| Checklist editor | not started |
 
 ## Layout
 

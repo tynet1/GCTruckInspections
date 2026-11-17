@@ -26,6 +26,7 @@ const SHELL_FILES = [
   "/js/zip.js",
   "/js/views/admin.js",
   "/js/views/common.js",
+  "/js/views/csv.js",
   "/js/views/detail.js",
   "/js/views/export.js",
   "/js/views/form.js",

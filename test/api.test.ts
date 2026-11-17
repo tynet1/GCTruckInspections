@@ -1377,4 +1377,152 @@ if (!url) {
         "a client talking to the app directly can't claim HTTPS");
     });
   });
+
+  describe("CSV export", () => {
+    /** RFC 4180 parse, enough for these files: rows of cells, quotes undone. */
+    function parseCsv(text: string): string[][] {
+      assert.equal(text.charCodeAt(0), 0xfeff, "starts with a byte-order mark");
+      const rows: string[][] = [];
+      let row: string[] = [];
+      let cur = "";
+      let quoted = false;
+      for (let i = 1; i < text.length; i++) {
+        const ch = text[i];
+        if (quoted) {
+          if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') quoted = false; else cur += ch;
+        } else if (ch === '"') quoted = true;
+        else if (ch === ",") { row.push(cur); cur = ""; }
+        else if (ch === "\r" && text[i + 1] === "\n") { row.push(cur); rows.push(row); row = []; cur = ""; i++; }
+        else cur += ch;
+      }
+      assert.equal(row.length + cur.length, 0, "ends with a line break");
+      return rows;
+    }
+    async function csv(cookie: string, path: string) {
+      const res = await inject("GET", `/export/${path}`, { cookie });
+      assert.equal(res.statusCode, 200, res.body);
+      assert.match(String(res.headers["content-type"]), /^text\/csv/);
+      const name = /filename="([^"]+)"/.exec(String(res.headers["content-disposition"]))?.[1] ?? "";
+      const [header, ...rows] = parseCsv(res.body);
+      assert.equal(Number(res.headers["x-row-count"]), rows.length);
+      for (const r of rows) assert.equal(r.length, header.length, "every row has every column");
+      const objects = rows.map((r) => Object.fromEntries(header.map((h, n) => [h, r[n]])));
+      return { name, header, rows: objects };
+    }
+    let shopCookie = "";
+    let truck = 0;
+    let inspectionId = "";
+
+    before(async () => {
+      const u = await one(`SELECT id FROM users WHERE name = 'Frank Shop'`);
+      const res = await app.inject({
+        method: "POST", url: "/api/auth/pin", remoteAddress: "172.18.0.5",
+        headers: { ...H, "x-forwarded-for": "203.0.113.200" }, payload: { user_id: u.id, pin: "1357" },
+      });
+      assert.equal(res.statusCode, 200);
+      shopCookie = cookieOf(res);
+      truck = (await one(`SELECT id FROM vehicles WHERE truck_code = 'AZ040'`)).id;
+      const body = submitBody({
+        vehicle_id: truck, inspection_date: "2026-03-14", mileage: 77123, inspector_name: "Casey Crew",
+        comments: 'Said "check it", then left\n=HYPERLINK("http://evil")', existing_notes: "- dent, rear", damage: [],
+      });
+      body.items = (body.items as { checklist_item_id: number; result: string; note?: string }[]).map((it, n) =>
+        n === 0 ? { ...it, result: "repair", note: "Mirror cracked" } : n === 1 ? { ...it, result: "repair", note: "Wiper torn" } : it);
+      const ins = await inject("POST", "/inspections", { cookie: crewCookie, body });
+      assert.equal(ins.statusCode, 201, ins.body);
+      inspectionId = ins.json().id;
+    });
+
+    test("who can download what", async () => {
+      for (const kind of ["inspections", "repairs", "maintenance", "trucks"]) {
+        assert.equal((await inject("GET", `/export/${kind}.csv`, { cookie: crewCookie })).statusCode, 403, kind);
+        assert.equal((await inject("GET", `/export/${kind}.csv`, { cookie: supCookie })).statusCode, 200, kind);
+        assert.equal((await inject("GET", `/export/${kind}.csv`)).statusCode, 401, kind);
+      }
+      assert.equal((await inject("GET", "/export/inspections.csv", { cookie: shopCookie })).statusCode, 403, "shop doesn't get inspections");
+      for (const kind of ["repairs", "maintenance", "trucks"]) {
+        assert.equal((await inject("GET", `/export/${kind}.csv`, { cookie: shopCookie })).statusCode, 200, kind);
+      }
+      assert.equal((await inject("GET", "/export/inspections.csv?from=2026-13-01", { cookie: supCookie })).statusCode, 400);
+      assert.equal((await inject("GET", "/export/inspections.csv?from=2026-02-01&to=2026-01-01", { cookie: supCookie })).statusCode, 400);
+      assert.equal((await inject("GET", "/export/repairs.csv?vehicle_id=abc", { cookie: supCookie })).statusCode, 400);
+    });
+
+    test("inspections: one row each, filtered by truck and date, notes kept exactly and formula-safe", async () => {
+      const all = await csv(supCookie, "inspections.csv");
+      assert.equal(all.rows.length, Number((await one(`SELECT count(*) AS n FROM live_inspections`)).n), "live inspections only");
+      assert.match(all.name, /^inspections_\d{4}-\d{2}-\d{2}\.csv$/);
+      const one1 = await csv(supCookie, `inspections.csv?vehicle_id=${truck}&from=2026-03-14&to=2026-03-14`);
+      assert.equal(one1.name, "inspections_AZ040_2026-03-14_to_2026-03-14.csv");
+      assert.equal(one1.rows.length, 1);
+      const r = one1.rows[0];
+      assert.equal(r["Date"], "2026-03-14");
+      assert.equal(r["Truck"], "AZ040");
+      assert.equal(r["Mileage"], "77123");
+      assert.equal(r["Repairs"], "2");
+      assert.equal(r["Repairs still open"], "2");
+      assert.match(r["Repairs needed"], /: Mirror cracked; .+: Wiper torn$/);
+      assert.equal(r["Comments"], `Said "check it", then left\n=HYPERLINK("http://evil")`, "a line break inside a cell survives");
+      assert.equal(r["Existing damage noted"], "'- dent, rear", "a leading minus can't start a formula");
+      assert.equal(r["Status"], "Submitted");
+      assert.equal(r["Archived"], "No");
+      assert.match(r["Link"], new RegExp(`/#/inspection/${inspectionId}$`));
+
+      // Archived ones only when asked for.
+      const sup = await inject("POST", `/inspections/${inspectionId}/archive`, { cookie: supCookie, body: { reason: "CSV test" } });
+      assert.equal(sup.statusCode, 200, sup.body);
+      assert.equal((await csv(supCookie, `inspections.csv?vehicle_id=${truck}&from=2026-03-14&to=2026-03-14`)).rows.length, 0);
+      const withArchived = await csv(supCookie, `inspections.csv?vehicle_id=${truck}&from=2026-03-14&to=2026-03-14&include=1`);
+      assert.equal(withArchived.rows[0]["Archived"], "Yes");
+      assert.equal((await inject("POST", `/inspections/${inspectionId}/unarchive`, { cookie: supCookie, body: {} })).statusCode, 200);
+    });
+
+    test("repairs: the open ones match the repairs board; fixed ones only when asked for", async () => {
+      const board = (await inject("GET", "/repairs", { cookie: supCookie })).json();
+      const open = await csv(shopCookie, "repairs.csv");
+      assert.equal(open.rows.length, board.length);
+      assert.match(open.name, /^open_repairs_/);
+      const mine = await csv(supCookie, `repairs.csv?vehicle_id=${truck}&from=2026-03-14&to=2026-03-14`);
+      assert.deepEqual(mine.rows.map((r) => r["Note"]), ["Mirror cracked", "Wiper torn"]);
+      assert.equal(mine.rows[0]["Status"], "Open");
+      assert.equal(mine.rows[0]["Reported"], "2026-03-14");
+
+      const item = await one(`SELECT id FROM inspection_items WHERE inspection_id = $1 AND note = 'Wiper torn'`, [inspectionId]);
+      assert.equal((await inject("POST", `/inspection-items/${item.id}/resolve`, { cookie: supCookie, body: { note: "New blade" } })).statusCode, 200);
+      const stillOpen = await csv(supCookie, `repairs.csv?vehicle_id=${truck}&from=2026-03-14&to=2026-03-14`);
+      assert.deepEqual(stillOpen.rows.map((r) => r["Note"]), ["Mirror cracked"]);
+      const both = await csv(supCookie, `repairs.csv?vehicle_id=${truck}&from=2026-03-14&to=2026-03-14&include=1`);
+      const fixed = both.rows.find((r) => r["Note"] === "Wiper torn")!;
+      assert.equal(fixed["Status"], "Fixed");
+      assert.equal(fixed["Fixed by"], "Sam Super");
+      assert.equal(fixed["How it was fixed"], "New blade");
+      assert.match(fixed["Fixed at"], /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    });
+
+    test("maintenance: live entries, every type of work with its next due; voided ones only when asked for", async () => {
+      const live = Number((await one(`SELECT count(*) AS n FROM service_logs WHERE voided_at IS NULL`)).n);
+      const all = Number((await one(`SELECT count(*) AS n FROM service_logs`)).n);
+      assert.ok(all > live, "the suite has a voided entry by now");
+      assert.equal((await csv(shopCookie, "maintenance.csv")).rows.length, live);
+      const withVoided = await csv(shopCookie, "maintenance.csv?include=1");
+      assert.equal(withVoided.rows.length, all);
+      assert.ok(withVoided.rows.some((r) => r["Voided"] === "Yes" && r["Void reason"]));
+      const multi = await one(`SELECT id FROM service_logs WHERE voided_at IS NULL AND jsonb_array_length(work) > 1 ORDER BY id LIMIT 1`);
+      assert.ok(multi, "the suite logged an entry with several types of work");
+      const row = (await csv(supCookie, "maintenance.csv")).rows.find((r) => r["Link"].endsWith(`/#/service/${multi.id}`))!;
+      assert.match(row["Work"], /; /, "each type of work is listed");
+    });
+
+    test("trucks: the ones in service; retired ones only when asked for", async () => {
+      const active = Number((await one(`SELECT count(*) AS n FROM vehicles WHERE active`)).n);
+      const every = Number((await one(`SELECT count(*) AS n FROM vehicles`)).n);
+      const list = await csv(shopCookie, "trucks.csv");
+      assert.equal(list.rows.length, active);
+      assert.equal((await csv(shopCookie, "trucks.csv?include=1")).rows.length, every);
+      const az070 = list.rows.find((r) => r["Truck"] === "AZ040")!;
+      assert.equal(az070["Open repairs"], "1");
+      assert.equal(az070["Last inspection"] >= "2026-03-14", true);
+      assert.equal(az070["In service"], "Yes");
+    });
+  });
 }

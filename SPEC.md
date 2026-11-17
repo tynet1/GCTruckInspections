@@ -164,7 +164,19 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
   The phone fetches the PDFs two at a time and retries each one on a weak signal, with progress and Cancel; any that still
   fail are listed with "Try again", which fetches only those. Up to 100 per export; the list shows the newest 200.
   The zip is built on the phone (`public/js/zip.js`, stored, no compression), so the server only ever makes single PDFs.
-- CSV export of inspections and repair items: not built yet.
+- **CSV export (built 2026-11-17):** a Download CSV screen (supervisor, shop, admin; from the menu and from a "Download
+  CSV" link on Export PDFs, the repairs board, a truck's Maintenance section and Admin → Trucks, carrying that screen's
+  truck). Pick what: **Inspections** (supervisor+; one row each: date, truck, inspector, mileage, oil due, trailer,
+  repairs needed and how many are still open, notes, registration on file then, sign-off, archived, link),
+  **Repairs** (one row per repair item: truck, item, note, reported, days open, fixed when/by/how, maintenance entry, link),
+  **Maintenance log** (one row per entry: every type of work with its next due, description, parts, cost, vendor, who
+  entered and last edited it, link) or **Trucks** (VIN, plate, registration, trailer, last inspection and mileage, open
+  repairs, damage on file, last maintenance, link). Filters: truck, dates (with the same quick picks), and "include
+  archived inspections / fixed repairs / voided entries / retired trucks". Every matching row is in the file (up to 20,000).
+  Lists count what the truck page counts (live inspections; deleted ones are never exported). The file is UTF-8 with a
+  byte-order mark so Excel opens names correctly; dates are 2026-11-17, times 2026-11-17 14:05 (Phoenix). Text that a
+  spreadsheet would run as a formula (starting with = + - @) gets a leading apostrophe. The phone shows how many rows,
+  then Save or Share; if nothing matches it says so instead of saving an empty file.
 
 ## 7. API sketch
 
@@ -190,7 +202,10 @@ POST /inspections/:id/review     {signature (png)}        supervisor+
 POST /inspection-items/:id/resolve {note}                 supervisor+
 GET  /inspections/:id/pdf
 GET  /repairs?vehicle_id                 -> open repairs across the fleet (repairs board)   supervisor, shop, admin
-GET  /export/inspections.csv?from&to&vehicle
+GET  /export/inspections.csv?vehicle_id&from&to&include=1   (archived too)      supervisor+
+GET  /export/repairs.csv?vehicle_id&from&to&include=1       (fixed too)         supervisor, shop, admin
+GET  /export/maintenance.csv?vehicle_id&from&to&include=1   (voided too)        supervisor, shop, admin
+GET  /export/trucks.csv?include=1                           (retired too)       supervisor, shop, admin
 admin CRUD: /vehicles, /trailers, /diagrams, /users, /checklist-items
 
 Maintenance log (built):
@@ -265,7 +280,7 @@ POST /service-logs/:id/void         {reason}                                    
      allowance), a lease-return checklist (damage repaired, keys, documents, final inspection and photos), registration and
      insurance dates with reminders, and trailers as their own assets.
    - **Batch PDF export as separate PDFs (built, see §6)** and the **repairs board (built, see §4 item 6)**.
-     Still to do: CSV export, checklist editor.
+     **CSV export (built, see §6).** Still to do: checklist editor.
 3. **Code review and hardening:** full code review; review and optimize performance while keeping stability; a burn-in test
    (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
 4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins.

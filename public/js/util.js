@@ -23,6 +23,33 @@ export function fmtDate(s) {
   return Number.isNaN(d.getTime()) ? str : `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
 }
 
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/** Quick date ranges for the export screens: [key, label]. */
+export const DATE_RANGES = [["7", "Last 7 days"], ["month", "This month"], ["last", "Last month"], ["", "Any date"]];
+
+/** { from, to } for a DATE_RANGES key ("" is any date). */
+export function dateRange(key) {
+  const n = new Date();
+  if (key === "7") return { from: iso(new Date(n.getFullYear(), n.getMonth(), n.getDate() - 6)), to: today() };
+  if (key === "month") return { from: iso(new Date(n.getFullYear(), n.getMonth(), 1)), to: today() };
+  if (key === "last") return { from: iso(new Date(n.getFullYear(), n.getMonth() - 1, 1)), to: iso(new Date(n.getFullYear(), n.getMonth(), 0)) };
+  return { from: "", to: "" };
+}
+
+/** Hand a file to the browser to save (Downloads on a PC, Files on an iPhone). */
+export function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.hidden = true;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
 export const fmtNum = (n) => (n == null || n === "" ? "" : Number(n).toLocaleString("en-US"));
 export const fmtMoney = (n) => (n == null || n === ""
   ? "" : "$" + Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));

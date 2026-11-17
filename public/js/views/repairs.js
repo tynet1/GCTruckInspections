@@ -59,7 +59,9 @@ function draw(app) {
       <div class="chips" id="rb-order" style="margin-top:12px">
         <button type="button" data-order="truck" class="${view.order === "truck" ? "on" : ""}">By truck</button>
         <button type="button" data-order="oldest" class="${view.order === "oldest" ? "on" : ""}">Oldest first</button>
-      </div></div>`;
+      </div>
+      <a class="link" style="display:inline-flex;align-items:center;min-height:44px;margin-top:4px" href="#/csv?what=repairs${
+        view.truck ? `&truck=${view.truck}` : ""}">Download CSV</a></div>`;
 
   if (!shown.length) {
     h += `<div class="card empty">No open repairs${view.truck ? " on this truck" : ""}. ✓</div>`;
