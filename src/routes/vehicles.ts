@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { requireRole, requireUser } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { defaultDiagram, diagramUrl, readDiagram } from "../diagrams.ts";
-import { bad, conflict, HttpError, idParam, notFound, obj, reqStr, UUID_RE } from "../http.ts";
+import { bad, conflict, DATE_RE, HttpError, idParam, isValidDate, notFound, obj, reqStr, str, UUID_RE } from "../http.ts";
 
 const VEHICLE_COLS = `
   vs.id, vs.truck_code, vs.unit, vs.vin, vs.plate, vs.year, vs.make, vs.model,
@@ -134,7 +134,7 @@ async function markRepaired(markId: number, userId: number, body: unknown) {
   if (dup) return { id: dup.id, duplicate: true };
   const ready = await q(
     `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
-        AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL`,
+        AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL`,
     [photoIds, userId],
   );
   const missing = photoIds.filter((id) => !ready.some((r) => r.id === id));
@@ -161,13 +161,109 @@ async function markRepaired(markId: number, userId: number, body: unknown) {
     for (const p of photoIds) {
       const r = await c.query(
         `UPDATE photos SET damage_repair_id = $2 WHERE id = $1 AND uploaded_by = $3
-            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL`,
+            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL`,
         [p, id, userId],
       );
       if (r.rowCount !== 1) throw conflict("A photo couldn't be attached. Add it again.");
     }
     return { id, duplicate: false };
   });
+}
+
+const REG_FROM = ["form", "sign-off", "truck"] as const;
+type RegFrom = (typeof REG_FROM)[number];
+
+/**
+ * A supervisor updates the truck's registration expiration: from the inspection form, while signing off an inspection,
+ * or on the truck page. Idempotent on client_id. `was` is the date the screen showed; if the truck's date changed since,
+ * nothing is changed and the caller is told the new one. An optional photo of the new registration or sticker is kept.
+ */
+export async function updateRegistration(vehicleId: number, userId: number, body: unknown) {
+  const b = obj(body);
+  const clientId = String(b.client_id ?? "").toLowerCase();
+  if (!UUID_RE.test(clientId)) throw bad("client_id must be a uuid.");
+  const expires = String(b.expires ?? "");
+  if (!DATE_RE.test(expires) || !isValidDate(expires)) throw bad("Enter the new expiration date.");
+  const latest = new Date(Date.now() + 6 * 365 * 86400_000).toISOString().slice(0, 10);
+  if (expires < "2020-01-01" || expires > latest) throw bad("That expiration date looks wrong. Check the year.");
+  const was = b.was == null || b.was === "" ? null : String(b.was);
+  if (was !== null && !isValidDate(was)) throw bad("was must be a date.");
+  if (!REG_FROM.includes(b.from as RegFrom)) throw bad("from must be form, sign-off or truck.");
+  const from = b.from as RegFrom;
+  const inspectionId = from === "sign-off" ? String(b.inspection_id ?? "").toLowerCase() : null;
+  if (inspectionId !== null && !UUID_RE.test(inspectionId)) throw bad("inspection_id must be a uuid.");
+  const note = str(b.note, "Note", 500);
+  if (b.photo_ids != null && !Array.isArray(b.photo_ids)) throw bad("photo_ids must be a list.");
+  const photoIds = [...new Set(((b.photo_ids as unknown[] | undefined) ?? []).map((x) => String(x).toLowerCase()))];
+  if (photoIds.length > 3) throw bad("Add at most 3 photos.");
+  if (photoIds.some((id) => !UUID_RE.test(id))) throw bad("Each photo needs an id.");
+
+  const dup = await one(
+    `SELECT r.id, v.registration_expires FROM registration_changes r JOIN vehicles v ON v.id = r.vehicle_id WHERE r.client_id = $1`,
+    [clientId]);
+  if (dup) return { id: dup.id as number, registration_expires: dup.registration_expires as string | null, duplicate: true };
+  if (photoIds.length) {
+    const ready = await q(
+      `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
+          AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL`,
+      [photoIds, userId],
+    );
+    const missing = photoIds.filter((id) => !ready.some((r) => r.id === id));
+    if (missing.length) throw new HttpError(422, "The photo hasn't finished uploading yet.", { code: "photos_missing", photos: missing });
+  }
+  if (inspectionId) {
+    const i = await one(
+      `SELECT i.vehicle_id, EXISTS (SELECT 1 FROM inspection_states s WHERE s.inspection_id = i.id AND s.state = 'deleted') AS deleted
+         FROM inspections i WHERE i.id = $1`,
+      [inspectionId],
+    );
+    if (!i || i.deleted || i.vehicle_id !== vehicleId) throw bad("That inspection isn't for this truck.");
+  }
+
+  return tx(async (c) => {
+    const v = (await c.query(`SELECT registration_expires FROM vehicles WHERE id = $1 AND active FOR UPDATE`, [vehicleId])).rows[0];
+    if (!v) throw notFound("Truck not found.");
+    const current: string | null = v.registration_expires;
+    if (current !== was) {
+      throw new HttpError(409, `Someone just changed this truck's registration to ${current ? usDate(current) : "no date"}. Check it and try again.`,
+        { code: "registration_changed", registration_expires: current });
+    }
+    if (current === expires) throw bad("That's already the date on file.");
+    const ins = await c.query(
+      `INSERT INTO registration_changes (client_id, vehicle_id, previous, expires, changed_by, source, inspection_id, note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (client_id) DO NOTHING RETURNING id`,
+      [clientId, vehicleId, current, expires, userId, from, inspectionId, note],
+    );
+    if (!ins.rows[0]) throw conflict("That update was already saved. Reload to see it.");
+    const id: number = ins.rows[0].id;
+    await c.query(`UPDATE vehicles SET registration_expires = $2, updated_at = now() WHERE id = $1`, [vehicleId, expires]);
+    for (const p of photoIds) {
+      const r = await c.query(
+        `UPDATE photos SET registration_change_id = $2 WHERE id = $1 AND uploaded_by = $3
+            AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL`,
+        [p, id, userId],
+      );
+      if (r.rowCount !== 1) throw conflict("A photo couldn't be attached. Add it again.");
+    }
+    return { id, registration_expires: expires, duplicate: false };
+  });
+}
+
+const usDate = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}/${d.slice(0, 4)}`;
+
+/** Every change to the truck's registration expiration, newest first, with who and from where. */
+export async function registrationHistory(vehicleId: number) {
+  const rows = await q(
+    `SELECT r.id, r.previous, r.expires, r.changed_at, r.source, r.inspection_id, r.note, u.name AS changed_by_name
+       FROM registration_changes r LEFT JOIN users u ON u.id = r.changed_by
+      WHERE r.vehicle_id = $1 ORDER BY r.changed_at DESC, r.id DESC LIMIT 100`,
+    [vehicleId],
+  );
+  const photos = rows.length
+    ? await q(`SELECT id, registration_change_id FROM photos WHERE registration_change_id = ANY($1::int[]) ORDER BY created_at, id`,
+      [rows.map((r) => r.id)])
+    : [];
+  return rows.map((r) => ({ ...r, photo_ids: photos.filter((p) => p.registration_change_id === r.id).map((p) => p.id as string) }));
 }
 
 /** Undo a supervisor's "mark repaired" (a mistake). Nothing is erased: the repair is ended with a reason. */
@@ -200,6 +296,12 @@ export default async function vehicleRoutes(app: FastifyInstance) {
   app.post("/damage-repairs/:id/undo", { preHandler: requireRole("supervisor") }, async (req) =>
     undoRepair(idParam(req.params), req.user!.id, req.body));
 
+  // Registration expiration: supervisors update it (form, sign-off, truck page); every change is kept.
+  app.post("/vehicles/:id/registration", { preHandler: requireRole("supervisor") }, async (req, reply) => {
+    const out = await updateRegistration(idParam(req.params), req.user!.id, req.body);
+    return reply.code(out.duplicate ? 200 : 201).send(out);
+  });
+
   app.get("/vehicles/:id", async (req) => {
     const id = idParam(req.params);
     const [vehicle] = await vehicleRows("WHERE vs.id = $1", [id]);
@@ -227,7 +329,8 @@ export default async function vehicleRoutes(app: FastifyInstance) {
       [id],
     );
     const damage = await damageHistory(id, vehicle);
-    return { vehicle, openRepairs, history, archived_count: archived?.n ?? 0, damage };
+    const registration = await registrationHistory(id);
+    return { vehicle, openRepairs, history, archived_count: archived?.n ?? 0, damage, registration };
   });
 
   // Previous inspection prefills the notes; all damage on file shows as grey dots on the new form.

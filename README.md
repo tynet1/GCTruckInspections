@@ -20,7 +20,7 @@ on the phone and upload when signal returns.
 | Inspection detail: repairs first, pins, photo gallery, full checklist, supervisor sign-off, resolve repairs | done |
 | PDF export matching the paper form (page 1 sheet, page 2 trailer + signatures, photo pages) | done |
 | Admin: users and PINs, trucks (every header field, trailer type, diagram), branding (name, color, logo) | done |
-| Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | running on Tyler's PC (Docker Desktop) since 2026-11-11; backup and restore tested; tunnel not set up yet |
+| Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | running on a DigitalOcean droplet since 2026-11-12 (Tyler's PC before that); backup and restore tested |
 
 ## Phase 2 (in progress)
 
@@ -33,6 +33,7 @@ on the phone and upload when signal returns.
 | Mark damage repaired (photo of the fix required; Log fix or supervisor; drops off the form's grey dots, kept on the truck page) | done |
 | Archive or delete inspections (delete = recoverable forever, admin only, reason required); database refuses to erase inspections | done |
 | Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve | done |
+| Registration expiration: supervisors update it from the form, sign-off or truck page; full history; PDFs keep the date on file | done |
 | CSV export, checklist editor | not started |
 
 ## Layout

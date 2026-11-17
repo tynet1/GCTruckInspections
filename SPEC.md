@@ -2,7 +2,7 @@
 
 Owner: Tyler Longshore (Business Systems & Technology Manager)
 Status: phase 1 (MVP) built, plus trailer types and branding; phase 2 maintenance log built; fleet management waiting on answers (§9)
-Target: for now, Docker Desktop on Tyler's own Windows PC, used from Tyler's phone only. Moves to a company server later.
+Target: a DigitalOcean droplet (since 2026-11-12; it ran on Tyler's Windows PC 2026-11-11/12). Moves to a company server later.
 
 ## 1. Why
 
@@ -45,9 +45,10 @@ Crews are on cellular in the field, so a VM on Tyler's machine is not reachable 
 
 The pilot can start on Wi-Fi at the yard if needed.
 
-**Current decision (Nov 2026):** the app runs on Tyler's PC and only Tyler's phone uses it. On the same Wi-Fi that works at
-`http://<pc-address>`. Away from that network, or for offline use (the service worker needs HTTPS), it needs the Cloudflare
-Tunnel, which needs a domain on Tyler's Cloudflare account.
+**Current decision (Nov 2026):** Tyler moved it to a DigitalOcean droplet on 2026-11-12, so it's on the open internet
+(Caddy on 80/443; HTTPS needs `SITE_ADDRESS` set to a domain). The PC copy no longer hosts it. Hardening still to do for
+an internet-facing app: the sign-in rate limit trusts a spoofable `CF-Connecting-IP` header, 4-digit crew PINs with a
+public name list, no per-user upload cap, no HSTS, and backups that stay on the droplet.
 
 ## 4. Screens (all phone-first, also good on iPad)
 
@@ -165,6 +166,8 @@ POST /inspections/:id/archive {reason?} · /unarchive          supervisor+
 POST /inspections/:id/delete {reason} · /restore             admin
 GET  /admin/deleted-inspections                               admin
 POST /damage-marks/:id/repair {client_id, note, photo_ids[]}   supervisor+ (photo required; idempotent)
+POST /vehicles/:id/registration {client_id, expires, was, from: form|sign-off|truck, inspection_id?, note?, photo_ids[]?}
+                                 supervisor+; 409 if the date changed since `was`; idempotent; history in GET /vehicles/:id
 POST /damage-repairs/:id/undo {reason}                       supervisor+ (supervisor repairs only)
 POST/PATCH /service-logs also take damage_mark_ids[], with photos[].damage_mark_id for the photo of each fix
 GET  /inspections/:id
@@ -255,15 +258,17 @@ POST /service-logs/:id/void         {reason}                                    
 5. **Wishlist (Tyler; not scheduled):** Yard and equipment inspections share one foundation: an inspection type for
    something other than a truck (a yard, a piece of equipment), each type with its own checklist. That foundation is the
    phase-2 checklist editor plus "assets" beyond trucks (trailers are already in fleet management's scope), so build those
-   together rather than three times. Quickest win: the registration update.
-   - **Supervisors update the registration expiration from an inspection (2026-11-17).** Today only an admin can change it
-     (Admin → Trucks), and the inspection form doesn't show it. Proposed: the form, and the supervisor's sign-off screen, show
-     the truck's registration expiration (red if expired, amber within 30 days); a supervisor+ can tap **Update** and enter
-     the new date, optionally with a photo of the new registration or sticker. It changes the truck, not the inspection
-     (submitted inspections stay read-only). Every change is kept in a dated history with who and when (today a truck edit
-     just overwrites the old value), and the inspection PDF shows the date that was on file on the inspection's date instead of
-     today's. To ask Tyler: may crew enter it too (a supervisor confirms), and does anything else (plate, insurance) need the
-     same treatment?
+   together rather than three times.
+   - **Supervisors update the registration expiration (built 2026-11-17, migration 008).** The inspection form, the
+     sign-off screen and the truck page show the truck's registration expiration (red once expired, amber within 30 days);
+     a supervisor or admin taps **Update**, enters the new date and can add a note and a photo of the new registration or
+     sticker. It changes the truck, not the inspection (submitted inspections stay read-only), and needs signal: it isn't
+     queued like the inspection itself. The screen sends the date it showed, so if someone changed it meanwhile nothing is
+     overwritten and the new date is shown. Every change, including Admin → Trucks edits and any made outside the app, is kept
+     for good in a registration history (who, when, from where, old and new date, note, photo) listed on the truck page.
+     An inspection, its detail screen and its PDF show the date that was on file when it was submitted; one set while
+     signing it off shows on that inspection. Not asked yet, so left out: crew entering it (a supervisor confirms), and the
+     same for plate or insurance.
    - **Yard inspections (2026-11-17, after the yard fire on 11/13/26).** A walk-through of a yard on its own checklist,
      with the same OK / Repair, notes, photos and signature as a truck inspection. Each finding becomes an open item on the
      repairs board until someone resolves it with a note. A fire-focused starting checklist to confirm: extinguishers present,
@@ -301,5 +306,5 @@ POST /service-logs/:id/void         {reason}                                    
 - [ ] Turning Wi-Fi/cell off mid-form loses nothing; the submit succeeds when signal returns, and a double tap on Save creates one record.
 - [ ] A supervisor can sign off, and the PDF matches the paper layout, including pins, photos and both signatures.
 - [ ] The next inspection on that truck shows all earlier damage as grey dots and prefills the notes.
-- [x] `docker compose up -d` (on Tyler's PC with Docker Desktop for now) brings everything up; a restore from backup is tested once.
+- [x] `docker compose up -d` brings everything up (first on Tyler's PC, now on a DigitalOcean droplet); a restore from backup is tested once.
   (2026-11-11: stack running; full flow, PDFs, backup, restore and undo checked on a throwaway copy of the stack.)

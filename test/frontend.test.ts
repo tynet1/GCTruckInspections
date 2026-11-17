@@ -22,3 +22,11 @@ test("every JavaScript file in public/ parses", () => {
     }
   }
 });
+
+test("every app script is in the service worker's offline shell (SHELL_FILES)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const sw = readFileSync(join(root, "sw.js"), "utf8");
+  const listed = new Set([...sw.matchAll(/"(\/js\/[^"]+\.js)"/g)].map((m) => m[1]));
+  const missing = jsFiles(join(root, "js")).map((f) => "/" + f.slice(root.length + 1).split("\\").join("/")).filter((p) => !listed.has(p));
+  assert.deepEqual(missing, [], "add these to SHELL_FILES in public/sw.js so the app works offline");
+});

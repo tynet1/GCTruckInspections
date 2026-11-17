@@ -3,8 +3,10 @@
 Everything runs from `docker compose`: Postgres 16, the app (API + web app + Chromium for PDFs), Caddy in front,
 a nightly backup job, and optionally a Cloudflare Tunnel so phones on cellular can reach it.
 
-**Today it runs on Tyler's Windows PC under Docker Desktop** (see [Windows PC notes](#windows-pc-docker-desktop) below);
-sections 1–6 describe the Ubuntu VM it will move to later. The compose file is the same for both.
+**Today it runs on a DigitalOcean droplet** (Ubuntu, set up by Tyler on 2026-11-12), following sections 1–6. Before that it
+ran on Tyler's Windows PC under Docker Desktop for a day ([Windows PC notes](#windows-pc-docker-desktop) below). The compose
+file is the same for both. On the droplet, use a domain in `SITE_ADDRESS` so Caddy serves HTTPS, and copy `backups/` off
+the droplet regularly.
 
 ## 1. Prepare the VM
 
@@ -127,7 +129,9 @@ app is opened (the service worker refreshes when the files change).
 
 ## Windows PC (Docker Desktop)
 
-How it's set up on Tyler's PC (since 2026-11-11):
+No longer the host (the droplet is, since 2026-11-12). An old copy of the stack is still on the PC and starts whenever
+Docker Desktop does; `docker compose stop` in `C:CodeGCTruckInspections` stops it without deleting anything.
+How it was set up on Tyler's PC (2026-11-11):
 
 - Needs WSL 2 (`wsl --install --no-distribution` in an admin PowerShell, then restart) and Docker Desktop.
 - The repo is at `C:\Code\GCTruckInspections`; `.env` there holds the database password and the first admin's

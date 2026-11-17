@@ -76,6 +76,9 @@ input.missing,textarea.missing,.seg.missing,canvas.missing,.repairrow.missing in
 .ofn{flex:0 0 26px;height:26px;border-radius:50%;background:#4b544e;color:#fff;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center}
 .ofrow .grow,.dmglist .grow{flex:1;min-width:0;overflow-wrap:anywhere}
 .dmglist{list-style:none;margin:10px 0 0;padding:0}
+.regval{display:inline-flex;flex-wrap:wrap;align-items:center;gap:2px 6px}
+.regval .link{padding:0 6px;min-width:44px}
+.regrow{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;margin-bottom:6px}
 .dmglist li{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line)}
 .dmglist li:last-child{border-bottom:0}
 .dmglist a{display:inline-flex;align-items:center;min-height:44px}

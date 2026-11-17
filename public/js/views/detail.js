@@ -4,6 +4,7 @@ import { setupSig } from "../sig.js";
 import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, esc, fmtDate, fmtNum, lightbox, modal, toast, vehicleInfo } from "../util.js";
 import { repairButtons, resolveRepair, SECTION_TITLES } from "./common.js";
+import { regPill, regValue, updateRegistration } from "./registration.js";
 
 let sigPad = null;
 
@@ -92,6 +93,9 @@ function changeState(i, action) {
   });
 }
 
+/** The registration date on file for this inspection; "Was expired" if it had passed by the inspection date. */
+const insReg = (i) => `${i.registration_expires ? fmtDate(i.registration_expires) : "—"} ${regPill(i.registration_expires, i.inspection_date)}`;
+
 export async function render(app, id) {
   const nav = state.nav;
   setHeader({ title: "Inspection", back: "#/" });
@@ -144,6 +148,7 @@ export async function render(app, id) {
     <dt>Inspector</dt><dd>${esc(i.inspector_name)}</dd>
     <dt>Mileage</dt><dd>${fmtNum(i.mileage)}${i.mileage_flagged ? ' <span class="pill warn">Lower than last</span>' : ""}</dd>
     <dt>Oil change due</dt><dd>${i.oil_change_due ? '<span class="pill warn">Yes</span>' : "No"}</dd>
+    <dt>Registration expires</dt><dd id="insReg">${insReg(i)}</dd>
     ${i.trailer ? `<dt>Trailer</dt><dd>${esc(i.trailer.number || "—")} · plate ${esc(i.trailer.plate || "—")}${i.trailer.type ? `<br><span class="small muted">${esc(i.trailer.type)}</span>` : ""}</dd>` : ""}
     <dt>Status</dt><dd>${i.status === "reviewed" ? '<span class="pill okk">Signed off</span>' : '<span class="pill grey">Awaiting sign-off</span>'}</dd>
   </dl>${isSup ? `<a class="secondary" style="width:100%;margin-top:12px" href="/api/inspections/${esc(i.id)}/pdf" download>Export PDF</a>` : ""}</div>`;
@@ -197,6 +202,7 @@ export async function render(app, id) {
       ${i.supervisor.note ? `<div style="margin-top:8px"><b>Supervisor note:</b> <span style="white-space:pre-wrap">${esc(i.supervisor.note)}</span></div>` : ""}`;
   } else if (isSup && i.state !== "deleted") {
     h += `<div style="margin-top:6px">
+      <div class="regrow"><span class="small muted">Truck registration expires</span> <span id="regBox">${regValue(v.registration_expires)}</span></div>
       <label class="f" for="supName">Supervisor name</label><input class="t" id="supName" value="${esc(state.user.name)}">
       <label class="f" for="supNote" style="margin-top:10px">Note (optional; corrections go here)</label><textarea class="t" id="supNote"></textarea>
       <label class="f" style="margin-top:10px">Signature</label><canvas class="sig" id="supsig" aria-label="Supervisor signature pad"></canvas>
@@ -214,6 +220,17 @@ export async function render(app, id) {
     if (lb) {
       const p = i.photos.find((x) => x.id === lb.dataset.lb);
       if (p) lightbox(photoUrl(p), [tagOf(p), p.caption].filter(Boolean).join(" — "));
+      return;
+    }
+    if (e.target.closest("[data-regupd]")) {
+      // Updated in place, so a signature or note already started here isn't lost. Set while signing off,
+      // it's also the date this inspection (and its PDF) shows.
+      const date = await updateRegistration(v, { from: "sign-off", inspectionId: i.id });
+      if (!date || stale(nav)) return;
+      v.registration_expires = date;
+      i.registration_expires = date;
+      $("#regBox").innerHTML = regValue(date);
+      $("#insReg").innerHTML = insReg(i);
       return;
     }
     const rs = e.target.closest("[data-resolve]");

@@ -9,6 +9,7 @@ import { setupSig } from "../sig.js";
 import { errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, $$, debounce, esc, fmtDate, fmtNum, shrinkImage, toast, today, uuid, vehicleInfo } from "../util.js";
 import { SECTION_TITLES } from "./common.js";
+import { regValue, updateRegistration } from "./registration.js";
 
 let d = null;   // the draft being edited
 let ctx = null; // { vehicle, sections, trailerDiagramUrl, prevDamage, prevMileage, app }
@@ -138,7 +139,8 @@ function draw() {
     h += `<div class="banner info">This browser can't keep drafts after it's closed (private browsing?). Finish and save before closing it.</div>`;
   }
   h += `<div class="card" style="margin-top:14px"><div class="hdr"><b>Truck</b><span>${esc(v.truck_code)}</span><b>Plate</b><span>${esc(v.plate || "—")}</span>
-    <b>Info</b><span>${esc(vehicleInfo(v) || "—")}</span><b>Unit</b><span>${esc(v.unit || "—")}</span></div></div>`;
+    <b>Info</b><span>${esc(vehicleInfo(v) || "—")}</span><b>Unit</b><span>${esc(v.unit || "—")}</span>
+    <b>Reg exp.</b><span id="regBox">${regValue(v.registration_expires)}</span></div></div>`;
   h += `<h2>Inspection</h2><div class="card"><div class="fields">
     <div><label class="f" for="f-date">Date</label><input class="t" type="date" id="f-date" value="${esc(d.date)}" max="${today()}"></div>
     <div><label class="f" for="f-insp">Name of inspector</label><input class="t" id="f-insp" value="${esc(d.inspector)}" autocomplete="name"></div>
@@ -331,6 +333,16 @@ function bind() {
       $$("[data-old]").forEach((el) => el.classList.toggle("hl", el.dataset.old === onFileHl));
       $$("[data-hl]").forEach((el) => el.classList.toggle("on", el.dataset.hl === onFileHl));
       if (onFileHl) $(`[data-old="${onFileHl}"]`)?.closest(".diagram")?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      return;
+    }
+    if (t.closest("[data-regupd]")) {
+      // Saved to the truck right away (needs signal); the inspection itself still saves on the phone as usual.
+      const vehicle = ctx.vehicle;
+      updateRegistration(vehicle, { from: "form" }).then((date) => {
+        if (!date || ctx?.vehicle !== vehicle) return;
+        vehicle.registration_expires = date;
+        $("#regBox").innerHTML = regValue(date);
+      });
       return;
     }
     const oil = t.closest("[data-oil]");

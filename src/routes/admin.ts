@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { checkPassword, hashSecret, PIN_RE, requireRole } from "../auth.ts";
 import type { Role } from "../auth.ts";
-import { one, q } from "../db.ts";
+import { one, q, tx } from "../db.ts";
 import { bad, conflict, idParam, int, isValidDate, notFound, obj, reqStr, str } from "../http.ts";
 import { isDiagramKind } from "../diagrams.ts";
 import { files, imageType, newKey } from "../storage.ts";
@@ -163,11 +163,20 @@ export default async function adminRoutes(app: FastifyInstance) {
     const cols = Object.keys(f);
     if (!cols.length) return { ok: true };
     try {
-      const r = await one(
-        `UPDATE vehicles SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")}, updated_at = now() WHERE id = $1 RETURNING id`,
-        [id, ...Object.values(f)],
-      );
-      if (!r) throw notFound("Truck not found.");
+      await tx(async (c) => {
+        const v = (await c.query(`SELECT registration_expires FROM vehicles WHERE id = $1 FOR UPDATE`, [id])).rows[0];
+        if (!v) throw notFound("Truck not found.");
+        if (f.registration_expires !== undefined && f.registration_expires !== v.registration_expires) {
+          await c.query(
+            `INSERT INTO registration_changes (vehicle_id, previous, expires, changed_by, source) VALUES ($1, $2, $3, $4, 'admin')`,
+            [id, v.registration_expires, f.registration_expires, req.user!.id],
+          );
+        }
+        await c.query(
+          `UPDATE vehicles SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")}, updated_at = now() WHERE id = $1`,
+          [id, ...Object.values(f)],
+        );
+      });
     } catch (e) {
       pgUnique(e, "A truck with that ID or VIN already exists.");
     }

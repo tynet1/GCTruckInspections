@@ -57,7 +57,7 @@ export default async function photoRoutes(app: FastifyInstance) {
 export async function cleanupOrphanPhotos(log: (m: string) => void): Promise<void> {
   const rows = await q(
     `DELETE FROM photos
-      WHERE inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL
+      WHERE inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL
         AND created_at < now() - make_interval(days => $1)
      RETURNING file_path`,
     [config.photo.orphanDays],

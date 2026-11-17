@@ -1071,4 +1071,157 @@ if (!url) {
       await inject("PATCH", `/admin/vehicles/${truckB}`, { cookie: adminCookie, body: { active: true } });
     });
   });
+
+  describe("registration expiration", () => {
+    let adminCookie = "";
+    let truck = 0;
+    let other = 0;
+    const reg = (body: Record<string, unknown>, cookie = supCookie, id = truck) =>
+      inject("POST", `/vehicles/${id}/registration`, { cookie, body: { client_id: randomUUID(), from: "truck", ...body } });
+    const current = async (id = truck) => (await one(`SELECT registration_expires FROM vehicles WHERE id = $1`, [id])).registration_expires;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const history = async (id = truck): Promise<any[]> => (await inject("GET", `/vehicles/${id}`, { cookie: supCookie })).json().registration;
+    const submit = async () => {
+      const res = await inject("POST", "/inspections", { cookie: crewCookie, body: submitBody({ vehicle_id: truck, mileage: 60000, damage: [] }) });
+      assert.equal(res.statusCode, 201, res.body);
+      return res.json().id as string;
+    };
+    const onFile = async (inspectionId: string) => (await inject("GET", `/inspections/${inspectionId}`, { cookie: supCookie })).json().registration_expires;
+
+    before(async () => {
+      adminCookie = cookieOf(await inject("POST", "/auth/login", { body: { email: "admin@test.local", password: "admin-password-1" } }));
+      const ts = await q(`SELECT id FROM vehicles WHERE truck_code NOT IN ('AZ018', 'AZ002', 'AZ053') ORDER BY id OFFSET 10 LIMIT 2`);
+      [truck, other] = ts.map((t: { id: number }) => t.id);
+      await q(`UPDATE vehicles SET registration_expires = '2026-12-31' WHERE id = ANY($1::int[])`, [[truck, other]]);
+    });
+
+    test("only supervisors and admins can update it", async () => {
+      const crew = await reg({ expires: "2027-12-31", was: await current() }, crewCookie);
+      assert.equal(crew.statusCode, 403);
+      const shop = await one(`SELECT id FROM users WHERE name = 'Frank Shop'`);
+      const shopCookie = cookieOf(await inject("POST", "/auth/pin", { body: { user_id: shop.id, pin: "1357" } }));
+      assert.equal((await reg({ expires: "2027-12-31", was: await current() }, shopCookie)).statusCode, 403);
+    });
+
+    test("a supervisor updates it from the truck page; the change is kept with who, when and the old date", async () => {
+      const before = await history();
+      const res = await reg({ expires: "2027-11-30", was: "2026-12-31", note: "Renewed online" });
+      assert.equal(res.statusCode, 201, res.body);
+      assert.equal(res.json().registration_expires, "2027-11-30");
+      assert.equal(await current(), "2027-11-30");
+      const h = await history();
+      assert.equal(h.length, before.length + 1);
+      assert.equal(h[0].previous, "2026-12-31");
+      assert.equal(h[0].expires, "2027-11-30");
+      assert.equal(h[0].source, "truck");
+      assert.equal(h[0].changed_by_name, "Sam Super");
+      assert.equal(h[0].note, "Renewed online");
+      assert.deepEqual(h[0].photo_ids, []);
+    });
+
+    test("bad dates, the same date and a date changed meanwhile are refused without changing anything", async () => {
+      const was = await current();
+      const n = (await history()).length;
+      assert.equal((await reg({ expires: "2027-02-30", was })).statusCode, 400);
+      assert.equal((await reg({ expires: "2045-01-01", was })).statusCode, 400);
+      assert.equal((await reg({ expires: "2019-06-01", was })).statusCode, 400);
+      assert.equal((await reg({ expires: was, was })).statusCode, 400);
+      assert.equal((await reg({ expires: "2028-01-31", was, from: "nowhere" })).statusCode, 400);
+      const stale = await reg({ expires: "2028-01-31", was: "2026-12-31" });
+      assert.equal(stale.statusCode, 409);
+      assert.equal(stale.json().details.code, "registration_changed");
+      assert.equal(stale.json().details.registration_expires, was);
+      assert.equal(await current(), was);
+      assert.equal((await history()).length, n);
+    });
+
+    test("a retried update (same client_id) is saved once", async () => {
+      const clientId = randomUUID();
+      const body = { client_id: clientId, expires: "2028-03-31", was: await current() };
+      const a = await reg(body);
+      const b = await reg(body);
+      assert.equal(a.statusCode, 201, a.body);
+      assert.equal(b.statusCode, 200, b.body);
+      assert.equal(b.json().id, a.json().id);
+      assert.equal((await q(`SELECT 1 FROM registration_changes WHERE client_id = $1`, [clientId])).length, 1);
+    });
+
+    test("an optional photo is kept with the change, can't be reused, and survives the orphan clean-up", async () => {
+      const { id: photoId } = await uploadPhoto(supCookie);
+      // Old enough that the clean-up would remove it if it still counted as unattached.
+      await q(`UPDATE photos SET created_at = now() - interval '30 days' WHERE id = $1`, [photoId]);
+      const res = await reg({ expires: "2028-04-30", was: await current(), photo_ids: [photoId] });
+      assert.equal(res.statusCode, 201, res.body);
+      assert.deepEqual((await history())[0].photo_ids, [photoId]);
+      const reuse = await inject("POST", "/inspections", {
+        cookie: supCookie,
+        body: submitBody({ vehicle_id: truck, mileage: 60000, damage: [], photos: [{ id: photoId, caption: null }] }),
+      });
+      assert.equal(reuse.statusCode, 422);
+      await cleanupOrphanPhotos(() => {});
+      assert.ok(await one(`SELECT 1 FROM photos WHERE id = $1`, [photoId]));
+      await assert.rejects(q(`DELETE FROM photos WHERE id = $1`, [photoId]));
+      const notYet = await reg({ expires: "2028-05-31", was: await current(), photo_ids: [randomUUID()] });
+      assert.equal(notYet.statusCode, 422);
+      assert.equal(notYet.json().details.code, "photos_missing");
+    });
+
+    test("an inspection shows the date on file when it was done; one set while signing off shows on that inspection", async () => {
+      await reg({ expires: "2028-06-30", was: await current() });
+      const a = await submit();
+      assert.equal(await onFile(a), "2028-06-30");
+      await reg({ expires: "2029-06-30", was: "2028-06-30" });
+      assert.equal(await onFile(a), "2028-06-30", "a later change doesn't rewrite an earlier inspection");
+      const b = await submit();
+      assert.equal(await onFile(b), "2029-06-30");
+      const signoff = await reg({ expires: "2029-07-31", was: "2029-06-30", from: "sign-off", inspection_id: a });
+      assert.equal(signoff.statusCode, 201, signoff.body);
+      assert.equal(await onFile(a), "2029-07-31", "set while signing A off, so A shows it");
+      assert.equal(await onFile(b), "2029-06-30", "B was done before that change");
+      const detail = (await inject("GET", `/inspections/${b}`, { cookie: supCookie })).json();
+      assert.equal(detail.vehicle.registration_expires, "2029-07-31", "the truck's date today");
+      assert.match(await pdfHtmlFor(a), /<th>Expiration<\/th><td>7\/31\/2029<\/td>/);
+      assert.match(await pdfHtmlFor(b), /<th>Expiration<\/th><td>6\/30\/2029<\/td>/);
+      const h = await history();
+      assert.equal(h[0].source, "sign-off");
+      assert.equal(h[0].inspection_id, a);
+    });
+
+    test("sign-off needs an inspection of this truck", async () => {
+      const was = await current();
+      assert.equal((await reg({ expires: "2030-01-31", was, from: "sign-off" })).statusCode, 400);
+      const theirs = (await one(`SELECT id FROM inspections WHERE vehicle_id <> $1 LIMIT 1`, [truck])).id;
+      assert.equal((await reg({ expires: "2030-01-31", was, from: "sign-off", inspection_id: theirs })).statusCode, 400);
+      assert.equal(await current(), was);
+    });
+
+    test("admin edits are recorded too; saving other fields records nothing", async () => {
+      const n = (await history(other)).length;
+      const same = await inject("PATCH", `/admin/vehicles/${other}`, { cookie: adminCookie, body: { unit: "U-77", registration_expires: "2026-12-31" } });
+      assert.equal(same.statusCode, 200, same.body);
+      assert.equal((await history(other)).length, n);
+      const res = await inject("PATCH", `/admin/vehicles/${other}`, { cookie: adminCookie, body: { registration_expires: "2027-08-31" } });
+      assert.equal(res.statusCode, 200, res.body);
+      const h = await history(other);
+      assert.equal(h.length, n + 1);
+      assert.equal(h[0].source, "admin");
+      assert.equal(h[0].previous, "2026-12-31");
+      assert.equal(h[0].expires, "2027-08-31");
+      assert.ok(h[0].changed_by_name);
+      const cleared = await inject("PATCH", `/admin/vehicles/${other}`, { cookie: adminCookie, body: { registration_expires: "" } });
+      assert.equal(cleared.statusCode, 200, cleared.body);
+      assert.equal((await history(other))[0].expires, null);
+    });
+
+    test("a change made outside the app is still recorded, and the history can't be edited or erased", async () => {
+      await q(`UPDATE vehicles SET registration_expires = '2031-01-31' WHERE id = $1`, [other]);
+      const h = await history(other);
+      assert.equal(h[0].source, "other");
+      assert.equal(h[0].expires, "2031-01-31");
+      assert.equal(h[0].changed_by_name, null);
+      await assert.rejects(q(`UPDATE registration_changes SET expires = '2020-01-01' WHERE vehicle_id = $1`, [other]));
+      await assert.rejects(q(`DELETE FROM registration_changes WHERE vehicle_id = $1`, [other]));
+      assert.equal((await history(other)).length, h.length);
+    });
+  });
 }

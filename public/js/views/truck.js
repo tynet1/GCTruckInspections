@@ -5,6 +5,7 @@ import { flushSvc, getSvcDraft, sendSvc } from "../svc.js";
 import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, fmtNum, lightbox, modal, shrinkImage, toast, uuid, vehicleInfo } from "../util.js";
 import { inspectionRow, repairButtons, resolveRepair, SECTION_TITLES, serviceRow } from "./common.js";
+import { regHistoryHtml, regValue, updateRegistration } from "./registration.js";
 
 let showAllService = false;
 let showAllDamage = false;
@@ -38,10 +39,10 @@ export async function render(app, id) {
       <b>Truck ID</b><span>${esc(v.truck_code)}</span><b>Unit</b><span>${esc(v.unit || "—")}</span>
       <b>VIN</b><span style="word-break:break-all">${esc(v.vin || "—")}</span><b>Plate</b><span>${esc(v.plate || "—")}</span>
       <b>Info</b><span>${esc(vehicleInfo(v) || "—")}</span>
-      <b>Reg exp.</b><span>${v.registration_expires ? fmtDate(v.registration_expires) : "—"} ${v.registration_expired ? '<span class="pill bad">Expired</span>' : ""}</span>
+      <b>Reg exp.</b>${regValue(v.registration_expires)}
       <b>Last miles</b><span>${v.last_mileage != null ? fmtNum(v.last_mileage) : "—"}</span>
       <b>Trailer</b><span>${v.pulls_trailer ? esc(v.trailer_type || "Yes") : "None"}</span>
-    </div></div>`;
+    </div>${regHistoryHtml(data.registration)}</div>`;
 
   if (draft?.status === "queued") {
     h += `<div class="banner info"><b>Saved on phone, not yet uploaded.</b><br>${esc(draft.lastError || "Uploading…")}.
@@ -79,6 +80,10 @@ export async function render(app, id) {
     if (r.state === "waiting") toast("Still no connection to the server. It will keep trying.");
     flush();
     if (!stale(nav)) render(app, id);
+  };
+  const ru = app.querySelector("[data-regupd]");
+  if (ru) ru.onclick = async () => {
+    if ((await updateRegistration(v, { from: "truck" })) && !stale(nav)) render(app, id);
   };
   const dc = $("#discard");
   if (dc) dc.onclick = async () => {

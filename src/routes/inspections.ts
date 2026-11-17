@@ -170,9 +170,9 @@ export async function submitInspection(input: SubmitInput, userId: number) {
   if (input.photos.length) {
     const ids = input.photos.map((p) => p.id);
     const found = await q(
-      `SELECT id, inspection_id, service_log_id, damage_repair_id, uploaded_by FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
+      `SELECT id, inspection_id, service_log_id, damage_repair_id, registration_change_id, uploaded_by FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
     const ok = new Set(found.filter((f) => f.inspection_id == null && f.service_log_id == null && f.damage_repair_id == null
-      && f.uploaded_by === userId).map((f) => f.id));
+      && f.registration_change_id == null && f.uploaded_by === userId).map((f) => f.id));
     const notReady = ids.filter((id) => !ok.has(id));
     if (notReady.length) {
       throw new HttpError(422, "Some photos haven't finished uploading yet.", { code: "photos_missing", photos: notReady });
@@ -251,7 +251,7 @@ async function insertChildren(c: PoolClient, id: string, input: SubmitInput, che
   for (const p of input.photos) {
     const r = await c.query(
       `UPDATE photos SET inspection_id = $2, caption = $3, damage_mark_id = $4, inspection_item_id = $5
-        WHERE id = $1 AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL`,
+        WHERE id = $1 AND inspection_id IS NULL AND service_log_id IS NULL AND damage_repair_id IS NULL AND registration_change_id IS NULL`,
       [p.id, id, p.caption, p.damage_key ? markIds.get(p.damage_key) ?? null : null,
         p.checklist_item_id ? itemIds.get(p.checklist_item_id) ?? null : null],
     );
@@ -304,13 +304,24 @@ export async function changeInspectionState(id: string, action: StateAction, use
 /** Everything about one inspection, for the detail screen and the PDF. */
 export async function loadInspection(id: string) {
   const i = await one(
-    `SELECT i.*, v.truck_code, v.unit, v.vin, v.plate, v.year, v.make, v.model, v.registration_expires,
+    `SELECT i.*, v.truck_code, v.unit, v.vin, v.plate, v.year, v.make, v.model,
+            -- The registration date that was on file for this inspection: the one a supervisor set while signing it
+            -- off, else the one on file when it was submitted (the first later change's "previous"), else today's.
+            CASE WHEN rs.id IS NOT NULL THEN rs.expires WHEN ra.id IS NOT NULL THEN ra.previous
+                 ELSE v.registration_expires END AS registration_expires,
+            v.registration_expires AS truck_registration_expires,
             d.id AS diagram_id, d.file_path AS diagram_path,
             td.id AS trailer_dia_id, td.file_path AS trailer_dia_path, td.name AS trailer_type
        FROM inspections i
        JOIN vehicles v ON v.id = i.vehicle_id
        LEFT JOIN diagrams d ON d.id = COALESCE(i.truck_diagram_id, v.diagram_id)
        LEFT JOIN diagrams td ON td.id = COALESCE(i.trailer_diagram_id, v.trailer_diagram_id)
+       LEFT JOIN LATERAL (
+         SELECT r.id, r.expires FROM registration_changes r WHERE r.inspection_id = i.id
+          ORDER BY r.changed_at DESC, r.id DESC LIMIT 1) rs ON true
+       LEFT JOIN LATERAL (
+         SELECT r.id, r.previous FROM registration_changes r WHERE r.vehicle_id = i.vehicle_id AND r.changed_at > i.created_at
+          ORDER BY r.changed_at, r.id LIMIT 1) ra ON true
       WHERE i.id = $1`,
     [id],
   );
@@ -428,7 +439,9 @@ export default async function inspectionRoutes(app: FastifyInstance) {
       vehicle: {
         id: i.vehicle_id, truck_code: i.truck_code, unit: i.unit, vin: i.vin, plate: i.plate,
         year: i.year, make: i.make, model: i.model,
+        registration_expires: i.truck_registration_expires, // the truck's date today
       },
+      registration_expires: i.registration_expires, // the date on file for this inspection (what its PDF shows)
       inspection_date: i.inspection_date,
       inspector_name: i.inspector_name,
       mileage: i.mileage,
