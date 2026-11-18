@@ -140,6 +140,8 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - Equipment checks (013) are read-only and never deleted the same way. Trailers, equipment, their change history and
   the equipment checklist can't be deleted. Which records a photo can belong to is one list (`src/photo-owners.ts`),
   used by every photo check and the clean-up, so a new kind of record can't leave its photos unprotected.
+- Equipment maintenance entries (014) can only be voided (with a reason), never edited or deleted; voiding reopens the
+  problems the entry closed.
 
 ## 5. Business rules
 
@@ -256,6 +258,11 @@ POST /equipment-checks {client_id, trailer_id, check_date, checker_name, comment
                                      -> {id, failed} (200 + duplicate on a retry)               supervisor, shop, admin
 GET  /equipment-checks?trailer=…, /equipment-checks/:id
 GET  /equipment-findings; POST /equipment-findings/:id/resolve {note}                           supervisor, shop, admin
+GET  /equipment-service-config       -> {work}                                                  supervisor, shop, admin
+GET  /equipment/:id/service          -> {entries, next_due}                                     supervisor, shop, admin
+POST /equipment-service {client_id, equipment_id, service_date, work:[{type, next_due_date}], description, parts, cost,
+     performed_by, vendor, notes, fix_item_ids, photos} -> {id, fixed} (200 + duplicate on a retry)   shop, admin
+GET  /equipment-service/:id; POST /equipment-service/:id/void {reason}                          read: supervisor, shop, admin; void: shop, admin
 
 Maintenance log (built):
 GET  /service-config                -> {categories}                          shop, supervisor, admin
@@ -401,8 +408,15 @@ POST /service-logs/:id/void         {reason}                                    
        The equipment page shows each trailer's pieces with Due / OK; the home screen shows how many are due and open problems.
      - **Problems** stay open (equipment page, repairs board "Equipment problems", the check) until the shop or a
        supervisor resolves them with a note.
-     - **Not built yet:** maintenance entries and next-due for equipment (Tyler: yes, like trucks), a PDF or CSV of checks,
-       and hour meters.
+     - **Maintenance log for equipment (built 2026-11-18, migration 014):** on a piece's page, the shop (and admins) log
+       work: date, types of work (sharpen blade or chain, trimmer line/head, air filter, spark plug, fuel system/carburetor,
+       oil change, tune-up, repair, other), each with an optional next-due date; what was done, parts, cost, who did it or
+       which outside shop, notes, photos, and which of the piece's open problems it fixes ("Log fix" on a problem ticks it;
+       saving resolves them). Next due per type comes from the newest live entry with that type, like trucks; once a date
+       passes the piece shows "Service due" on the equipment page. Saved on the phone and queued like the other forms.
+       Entries aren't edited: a mistaken one is voided with a reason, which reopens the problems it closed. The database
+       refuses edits and deletes, and its photos are protected like any other. (Unlike the truck log, no editing yet.)
+     - **Not built yet:** a PDF or CSV of equipment checks and maintenance, and hour meters.
      Original plan: inspections of equipment other than trucks, each piece with its own ID, its
      type's checklist and hours instead of mileage where it has a meter. Needs equipment as assets (add, retire, history),
      which overlaps fleet management. Tyler's answers (2026-11-17): the **yard-care equipment carried on the trailers**,
@@ -435,8 +449,8 @@ POST /service-logs/:id/void         {reason}                                    
      are told right away; damage from an incident **goes into the truck's "Damage on file" and repair items**. Still waiting
      on a sample form.
 6. **Build order (Tyler left it to Claude, 2026-11-17):** PDF repair ticket (built) → checklist editor (built) → yard
-   inspections (built) → equipment checks (built) → maintenance log for equipment → fleet management (status, trailers
-   on trucks, supervisor reminders; lease details when Tyler has them) → incident reports once a sample form arrives.
+   inspections (built) → equipment checks (built) → maintenance log for equipment (built) → fleet management (status,
+   trailers on trucks, supervisor reminders; lease details when Tyler has them) → incident reports once a sample form arrives.
    Phase 3 (code review, burn-in) after those.
 
 ## 10. Acceptance checklist for MVP

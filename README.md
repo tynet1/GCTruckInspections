@@ -37,7 +37,7 @@ drafts stay on the phone and upload when signal returns.
 | Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve / Ticket | done |
 | CSV export: inspections, repairs, maintenance log, trucks, with truck/date filters (Download CSV in the menu) | done |
 | Checklist editor (Admin → Checklist: truck inspection, yard walk or equipment): add, reword, reorder, retire and restore items, with a change history. New inspections only; submitted ones keep their items and wording, and a form already open on a phone still sends | done |
-| Fleet management: status (in service, in the shop, on hold, preparing for return, returned, sold), trailers that move between trucks, a reminders list for supervisors | scope answered 2026-11-17; lease details wait until Tyler has them |
+| Fleet management: status (in service, in the shop, on hold, preparing for return, returned, sold), trailers that move between trucks, a reminders list for supervisors | next (scope answered 2026-11-17; lease details wait until Tyler has them) |
 
 ## Wishlist (SPEC §9 item 5)
 
@@ -47,7 +47,7 @@ drafts stay on the phone and upload when signal returns.
 | PDF repair ticket: tick repairs on a truck, numbered ticket (RT-0001) to print/share/email, Log fix from it, void with a reason | done |
 | Yard walks (after the 11/13/26 yard fire): daily at AZ by a supervisor on a fire-safety checklist with OK/Repair, notes, photos and signature; works offline; problems stay open on the yard page, the repairs board and supervisors' home screen until resolved; PDF | done |
 | Equipment checks: trailers and tagged equipment kept in Admin (moves between trailers and retirements kept); the shop or a supervisor checks a trailer at a time, each piece on its type's checklist or "Not here"; due every 30 days (changeable); works offline; problems on the equipment page, repairs board and home screen until resolved | done |
-| Maintenance log for equipment (log work on a piece, next due) | next |
+| Maintenance log for equipment: the shop logs work on a piece (types of work, next due per type, cost, photos), closes its open problems ("Log fix"), void with a reason; "Service due" once a date passes; works offline | done |
 | Incident reports: vehicle incidents filed by supervisors; damage goes on the truck's record | waiting on a sample form |
 
 Build order and every answered question are in SPEC §9. Phase 3 after that: full code review, performance and a burn-in test.
@@ -66,7 +66,8 @@ Build order and every answered question are in SPEC §9. Phase 3 after that: ful
 ```
 src/                 Fastify API (TypeScript, run directly by Node 24, no build step)
   routes/            auth, vehicles, photos, inspections, service (maintenance), tickets, export (CSV),
-                     checklist (editor), yard (yard walks), equipment (trailers, equipment, checks), admin, branding
+                     checklist (editor), yard (yard walks), equipment (trailers, equipment, checks),
+                     equipment-service (equipment maintenance), admin, branding
   photo-owners.ts    the one list of records a photo can belong to (used by every photo check and the clean-up)
   pdf.ts             paper-form HTML template -> PDF via headless Chromium
   ticket-pdf.ts      repair ticket PDF
@@ -75,8 +76,8 @@ src/                 Fastify API (TypeScript, run directly by Node 24, no build 
   storage.ts         photo/signature storage (local disk today; S3/Azure later behind the same interface)
 public/              the web app (plain HTML/CSS/JS modules, no framework), service worker, diagrams
   js/views/          one module per screen (home, truck, form, detail, repairs, tickets, yard, csv, export, admin…)
-  js/drafts.js, svc.js, yardq.js, equipq.js   what's saved on the phone and the upload queues (inspections,
-                     maintenance, yard walks, equipment checks)
+  js/drafts.js, svc.js, yardq.js, equipq.js, esvcq.js   what's saved on the phone and the upload queues
+                     (inspections, maintenance, yard walks, equipment checks, equipment maintenance)
 db/migrations/       numbered SQL migrations, applied automatically on start (never edit one that has shipped)
 seed/vehicles.csv    trucks added on start if missing (never overwrites edits made in Admin)
 scripts/             backup.sh (nightly, run by the backup container), restore.sh

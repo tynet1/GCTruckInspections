@@ -5,12 +5,15 @@ import { loadBranding } from "./brand.js";
 import { allSvcDrafts, flushSvc, onSvcChange, onSvcSent } from "./svc.js";
 import { allYardDrafts, flushYard, onYardChange, onYardSent } from "./yardq.js";
 import { allEquipDrafts, flushEquip, onEquipChange, onEquipSent } from "./equipq.js";
+import { allEsvcDrafts, flushEsvc, onEsvcChange, onEsvcSent } from "./esvcq.js";
 import { atLeast, can, homeHeader, state } from "./ui.js";
 import { $, esc, modal, toast } from "./util.js";
 import * as admin from "./views/admin.js";
 import * as detail from "./views/detail.js";
 import * as equipDetail from "./views/equip-detail.js";
 import * as equipForm from "./views/equip-form.js";
+import * as equipService from "./views/equip-service.js";
+import * as equipServiceForm from "./views/equip-service-form.js";
 import * as equipment from "./views/equipment.js";
 import * as csvView from "./views/csv.js";
 import * as exportView from "./views/export.js";
@@ -41,6 +44,8 @@ const routes = [
   { re: /^#\/equipment(?:\/piece\/(\d+))?$/, view: equipment, allow: () => can.seeService() },
   { re: /^#\/equipment\/check\/(\d+|none)$/, view: equipForm, allow: () => can.seeService() },
   { re: /^#\/equipment-check\/([0-9a-f-]{36})$/i, view: equipDetail, allow: () => can.seeService() },
+  { re: /^#\/equipment\/service\/new\/(\d+)(?:\?fix=(\d+))?$/, view: equipServiceForm, allow: () => can.logService() },
+  { re: /^#\/equipment-service\/(\d+)$/, view: equipService, allow: () => can.seeService() },
   { re: /^#\/admin(?:\/(users|trucks|equipment|checklist|branding|deleted))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
 
@@ -83,15 +88,16 @@ function onSignedIn(user) {
   flushSvc();
   flushYard();
   flushEquip();
+  flushEsvc();
   route();
 }
 
 /** Inspections, maintenance entries and yard walks saved on this phone but not yet uploaded. */
 async function queuedCounts() {
-  const [a, b, c, e] = await Promise.all([allDrafts().catch(() => []), allSvcDrafts().catch(() => []), allYardDrafts().catch(() => []),
-    allEquipDrafts().catch(() => [])]);
+  const [a, b, c, e, f] = await Promise.all([allDrafts().catch(() => []), allSvcDrafts().catch(() => []), allYardDrafts().catch(() => []),
+    allEquipDrafts().catch(() => []), allEsvcDrafts().catch(() => [])]);
   const queued = (list) => list.filter((d) => d.status === "queued").length;
-  return { inspections: queued(a), service: queued(b), yard: queued(c), equipment: queued(e) };
+  return { inspections: queued(a), service: queued(b) + queued(f), yard: queued(c), equipment: queued(e) };
 }
 
 export async function signOut() {
@@ -138,7 +144,7 @@ async function updateNetbar() {
     bar.hidden = false;
     $("#retryNow").onclick = async () => {
       $("#retryNow").innerHTML = `<span class="spinner"></span>`;
-      await Promise.all([flush(), flushSvc(), flushYard(), flushEquip()]);
+      await Promise.all([flush(), flushSvc(), flushYard(), flushEquip(), flushEsvc()]);
       updateNetbar();
     };
   } else if (!navigator.onLine) {
@@ -180,6 +186,7 @@ async function boot() {
   onSvcChange(updateNetbar);
   onYardChange(updateNetbar);
   onEquipChange(updateNetbar);
+  onEsvcChange(updateNetbar);
   onSent((d, res) => {
     if (!res.duplicate) toast(`${d.truckCode} inspection uploaded ✓`);
     // Lists drawn before the upload finished are now out of date.
@@ -199,13 +206,16 @@ async function boot() {
     if (!res.duplicate) toast(`${d.title} equipment check uploaded ✓`);
     if (current === home || current === equipment) route();
   });
+  onEsvcSent((d, res) => {
+    if (!res.duplicate) toast(`${d.tag} maintenance uploaded ✓`);
+  });
   window.addEventListener("online", updateNetbar);
   window.addEventListener("offline", updateNetbar);
   window.addEventListener("hashchange", route);
 
   await route();
   updateNetbar();
-  if (state.user) { flush(); flushSvc(); flushYard(); flushEquip(); }
+  if (state.user) { flush(); flushSvc(); flushYard(); flushEquip(); flushEsvc(); }
 }
 
 boot();

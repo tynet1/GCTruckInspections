@@ -240,7 +240,13 @@ async function pieces(where = "", params: unknown[] = []) {
     `SELECT e.id, e.tag, e.type, e.make, e.model, e.serial, e.trailer_id, e.notes,
             (SELECT max(c.check_date) FROM equipment_check_pieces p JOIN equipment_checks c ON c.id = p.check_id
               WHERE p.equipment_id = e.id AND p.status = 'checked') AS last_checked,
-            (SELECT count(*) FROM equipment_check_items i WHERE i.equipment_id = e.id AND i.result = 'repair' AND i.resolved_at IS NULL)::int AS open_problems
+            (SELECT count(*) FROM equipment_check_items i WHERE i.equipment_id = e.id AND i.result = 'repair' AND i.resolved_at IS NULL)::int AS open_problems,
+            -- Maintenance whose next-due date has passed (newest live entry per type of work, migration 014).
+            (SELECT count(*) FROM (
+               SELECT DISTINCT ON (w->>'type') (w->>'next_due_date')::date AS d
+                 FROM equipment_service_logs s CROSS JOIN LATERAL jsonb_array_elements(s.work) w
+                WHERE s.equipment_id = e.id AND s.voided_at IS NULL
+                ORDER BY w->>'type', s.service_date DESC, s.id DESC) x WHERE x.d <= current_date)::int AS service_due
        FROM equipment e WHERE e.active ${where} ORDER BY lower(e.tag)`,
     params,
   );

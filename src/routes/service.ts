@@ -71,7 +71,7 @@ function optDate(v: unknown, label: string): string | null {
   return s;
 }
 
-function money(v: unknown): number | null {
+export function money(v: unknown): number | null {
   if (v == null || v === "") return null;
   const s = String(v).replace(/[$,\s]/g, "");
   if (!/^\d{1,7}(\.\d{1,2})?$/.test(s)) throw bad("Cost must be an amount like 125.50.");

@@ -1,7 +1,7 @@
 // Equipment (shop, supervisors, admin): each trailer with its pieces, when each was last checked and whether it's due,
 // open problems, and recent checks. A piece's own page shows its details, history (moves between trailers) and checks.
 import { api } from "../api.js";
-import { errorHtml, setHeader, stale, state } from "../ui.js";
+import { can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, lightbox, toast } from "../util.js";
 import { allEquipDrafts, flushEquip, sendEquip } from "../equipq.js";
 import { resolveRepair } from "./common.js";
@@ -17,7 +17,8 @@ export function problemItem(f, { showPiece = true } = {}) {
       <div class="small muted">${esc(f.checker_name)} · <a href="#/equipment-check/${esc(f.check_id)}">From ${fmtDate(f.check_date)} check</a></div>
       ${f.photo_ids?.length ? `<div class="row" style="margin-top:4px">${f.photo_ids.map((id) =>
         `<img class="dmgthumb" src="/api/photos/${esc(id)}" data-lb="${esc(id)}" data-cap="${esc(`${f.tag} · ${f.label}${f.note ? `: ${f.note}` : ""}`)}" alt="Photo of the problem">`).join("")}</div>` : ""}
-    </div><div class="btncol"><button class="secondary" data-eresolve="${f.id}" data-label="${esc(`${f.tag}: ${f.label}`)}">Resolve</button></div></div></li>`;
+    </div><div class="btncol">${can.logService() ? `<a class="secondary" href="#/equipment/service/new/${f.equipment_id}?fix=${f.id}">Log fix</a>` : ""}
+      <button class="secondary" data-eresolve="${f.id}" data-label="${esc(`${f.tag}: ${f.label}`)}">Resolve</button></div></div></li>`;
 }
 
 /** Wire Resolve buttons and thumbnails inside `root`; `after` runs once a problem was resolved. */
@@ -34,6 +35,7 @@ function pieceRow(p) {
   return `<a class="item" href="#/equipment/piece/${p.id}"><span class="grow"><b>${esc(p.tag)}</b> ${esc(p.type_title)}
       <span class="small muted clip">${esc([p.make, p.model].filter(Boolean).join(" "))}${p.make || p.model ? " · " : ""}${dueText(p)}</span></span>
     <span class="row" style="justify-content:flex-end;flex-wrap:nowrap">${p.due ? `<span class="pill warn">Due</span>` : `<span class="pill okk">OK</span>`}
+      ${p.service_due ? `<span class="pill warn">Service due</span>` : ""}
       ${p.open_problems ? `<span class="pill bad">${p.open_problems} open</span>` : ""}</span></a>`;
 }
 
@@ -114,13 +116,16 @@ async function renderPiece(app, id) {
   const nav = state.nav;
   setHeader({ title: "Equipment", back: "#/equipment" });
   app.innerHTML = `<div class="empty">Loading…</div>`;
-  let data;
+  let data, svc, problems;
   try {
-    data = await api(`/equipment/${id}`);
+    [data, svc, problems] = await Promise.all([
+      api(`/equipment/${id}`), api(`/equipment/${id}/service`), api("/equipment-findings"),
+    ]);
   } catch (e) {
     if (!stale(nav)) app.innerHTML = errorHtml(e);
     return;
   }
+  problems = problems.filter((f) => String(f.equipment_id) === String(id));
   if (stale(nav)) return;
   const e = data.equipment;
   setHeader({ title: e.tag, sub: e.type_title, back: "#/equipment",
@@ -136,6 +141,15 @@ async function renderPiece(app, id) {
       <dt>Serial</dt><dd>${esc(e.serial || "—")}</dd><dt>Trailer</dt><dd>${esc(e.trailer_number || "Not on a trailer")}</dd>
       ${e.notes ? `<dt>Notes</dt><dd style="white-space:pre-wrap">${esc(e.notes)}</dd>` : ""}
       ${e.active ? "" : `<dt>Status</dt><dd><span class="pill grey">Retired</span></dd>`}</dl></div>`;
+  h += `<h2>Open problems (${problems.length})</h2><div class="card">${problems.length
+    ? `<ul class="repairlist">${problems.map((f) => problemItem(f, { showPiece: false })).join("")}</ul>` : `<span class="muted">Nothing open. ✓</span>`}</div>`;
+  h += `<div class="h2row"><h2>Maintenance</h2>${can.logService() && e.active ? `<a class="link" href="#/equipment/service/new/${e.id}">+ Log maintenance</a>` : ""}</div>
+    <div class="card list">${svc.next_due.length ? `<div class="small" style="padding:4px 2px 10px">${svc.next_due.map((n) =>
+      `<div>${esc(n.title)}: next due ${fmtDate(n.date)} <span class="pill ${n.state === "due" ? "bad" : n.state === "soon" ? "warn" : "grey"}">${n.state === "due" ? "Due" : n.state === "soon" ? "Soon" : "OK"}</span></div>`).join("")}</div>` : ""}
+      ${svc.entries.length ? svc.entries.map((s) => `<a class="item${s.voided ? " voided" : ""}" href="#/equipment-service/${s.id}">
+        <span class="grow">${fmtDate(s.service_date)} · ${esc(s.work_titles.join(", "))}<span class="small muted clip">${esc(s.description)}</span></span>
+        <span class="row" style="justify-content:flex-end;flex-wrap:nowrap">${s.voided ? `<span class="pill grey">Voided</span>` : ""}
+          ${s.fixed && !s.voided ? `<span class="pill okk">${s.fixed} fixed</span>` : ""}</span></a>`).join("") : `<div class="empty">No maintenance logged yet.</div>`}</div>`;
   h += `<h2>Checks (${data.checks.length})</h2><div class="card list">${data.checks.length ? data.checks.map((c) => `<a class="item" href="#/equipment-check/${esc(c.id)}">
       <span class="grow">${fmtDate(c.check_date)}<span class="small muted clip">${esc(c.checker_name)}${c.note ? ` · ${esc(c.note)}` : ""}</span></span>
       ${c.status === "not_here" ? `<span class="pill grey">Not here</span>` : c.problems ? `<span class="pill bad">${c.problems} problem${c.problems === 1 ? "" : "s"}</span>` : `<span class="pill okk">All OK</span>`}</a>`).join("")
@@ -143,4 +157,5 @@ async function renderPiece(app, id) {
   h += `<h2>History</h2><div class="card"><ul class="small" style="padding-left:18px;margin:0">${data.history.map((x) =>
     `<li>${fmtDate(x.changed_at)} · ${esc(x.changed_by_name)} · ${ACTIONS[x.action] || esc(x.action)} ${what(x)}</li>`).join("")}</ul></div>`;
   app.innerHTML = h;
+  wireProblems(app, () => { if (!stale(nav)) renderPiece(app, id); });
 }

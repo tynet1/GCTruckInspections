@@ -2139,4 +2139,121 @@ if (!url) {
       assert.equal((await inject("POST", `/admin/equipment-checklist/${add.json().id}/retire`, { cookie: adminCookie, body: {} })).statusCode, 200);
     });
   });
+
+  describe("equipment maintenance", () => {
+    let shopCookie = "";
+    let blower = 0;
+    let saw = 0;
+    let problemId = 0;
+    let entryId = 0;
+    let entryPhoto = "";
+    const ymd = (days = 0) => {
+      const d = new Date(Date.now() + days * 86400_000);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const entry = (over: Record<string, unknown> = {}) => ({
+      client_id: randomUUID(), equipment_id: blower, service_date: ymd(), work: [{ type: "repair" }],
+      description: "Replaced the cracked tube", cost: "$18.40", performed_by: "Frank", ...over,
+    });
+    const log = (cookie: string, body: object) => inject("POST", "/equipment-service", { cookie, body });
+
+    before(async () => {
+      const shop = await one(`SELECT id FROM users WHERE name = 'Frank Shop'`);
+      shopCookie = cookieOf(await app.inject({
+        method: "POST", url: "/api/auth/pin", remoteAddress: "172.18.0.5",
+        headers: { ...H, "x-forwarded-for": "203.0.113.252" }, payload: { user_id: shop.id, pin: "1357" },
+      }));
+      blower = (await one(`SELECT id FROM equipment WHERE tag = 'BL-01'`)).id;
+      saw = (await one(`SELECT id FROM equipment WHERE tag = 'CS-01'`)).id;
+      // A check that finds a problem on the blower.
+      const trailer = (await one(`SELECT trailer_id FROM equipment WHERE id = $1`, [blower])).trailer_id;
+      const cfg = (await inject("GET", `/equipment-config/${trailer}`, { cookie: shopCookie })).json();
+      const tube = cfg.checklist.find((c: { label: string }) => c.label === "Tubes and nozzle intact");
+      const res = await inject("POST", "/equipment-checks", { cookie: shopCookie, body: {
+        client_id: randomUUID(), trailer_id: trailer, check_date: ymd(), checker_name: "Frank", checklist_as_of: cfg.as_of,
+        pieces: cfg.pieces.map((p: { id: number; type: string }) => ({
+          equipment_id: p.id, status: "checked",
+          items: cfg.checklist.filter((c: { section: string }) => c.section === "all" || c.section === p.type)
+            .map((c: { id: number }) => c.id === tube.id && p.id === blower
+              ? { checklist_item_id: c.id, result: "repair", note: "Cracked tube" } : { checklist_item_id: c.id, result: "ok" }),
+        })),
+      } });
+      assert.equal(res.statusCode, 201, res.body);
+      problemId = (await one(`SELECT id FROM equipment_check_items WHERE check_id = $1 AND result = 'repair'`, [res.json().id])).id;
+    });
+
+    test("the shop logs work on a piece and closes its problems; a retry doesn't make a second", async () => {
+      assert.equal((await log(supCookie, entry())).statusCode, 403, "supervisors look; the shop logs");
+      assert.equal((await log(crewCookie, entry())).statusCode, 403);
+      assert.equal((await log(shopCookie, entry({ work: [] }))).statusCode, 400);
+      assert.equal((await log(shopCookie, entry({ work: [{ type: "polish" }] }))).statusCode, 400);
+      assert.equal((await log(shopCookie, entry({ work: [{ type: "air_filter", next_due_date: ymd() }] }))).statusCode, 400, "next due after the work");
+      assert.equal((await log(shopCookie, entry({ description: " " }))).statusCode, 400);
+      const other = await log(shopCookie, entry({ equipment_id: saw, fix_item_ids: [problemId] }));
+      assert.equal(other.json().details?.code, "bad_problems", "a blower's problem can't be fixed on the chainsaw");
+
+      const { id: photo } = await uploadPhoto(shopCookie);
+      entryPhoto = photo;
+      const body = entry({
+        work: [{ type: "repair" }, { type: "air_filter", next_due_date: ymd(30) }],
+        fix_item_ids: [problemId], photos: [{ id: photo, caption: "Receipt" }],
+      });
+      const a = await log(shopCookie, body);
+      assert.equal(a.statusCode, 201, a.body);
+      entryId = a.json().id;
+      assert.equal(a.json().fixed, 1);
+      const b = await log(shopCookie, body);
+      assert.deepEqual([b.statusCode, b.json().id, b.json().duplicate], [200, entryId, true]);
+
+      const open = (await inject("GET", "/equipment-findings", { cookie: shopCookie })).json();
+      assert.ok(!open.some((f: { id: number }) => f.id === problemId), "the problem is closed");
+      const item = await one(`SELECT resolution_note FROM equipment_check_items WHERE id = $1`, [problemId]);
+      assert.equal(item.resolution_note, "Fixed (maintenance log): Replaced the cracked tube");
+
+      const svc = (await inject("GET", `/equipment/${blower}/service`, { cookie: supCookie })).json();
+      assert.deepEqual(svc.entries.map((e: { id: number; work_titles: string[]; fixed: number }) => [e.id, e.work_titles, e.fixed]),
+        [[entryId, ["Repair", "Air filter"], 1]]);
+      assert.deepEqual(svc.next_due.map((n: { type: string; state: string }) => [n.type, n.state]), [["air_filter", "ok"]]);
+      const detail = (await inject("GET", `/equipment-service/${entryId}`, { cookie: supCookie })).json();
+      assert.equal(Number(detail.cost), 18.4);
+      assert.equal(detail.fixed[0].note, "Cracked tube");
+      assert.equal(detail.photos[0].id, photo);
+    });
+
+    test("next due per type of work: overdue shows as Service due; a newer entry without a date clears it", async () => {
+      const r = await log(shopCookie, entry({ equipment_id: saw, service_date: ymd(-10), work: [{ type: "sharpen", next_due_date: ymd(-2) }],
+        description: "Sharpened the chain" }));
+      assert.equal(r.statusCode, 201, r.body);
+      const due = async () => {
+        const all = (await inject("GET", "/equipment", { cookie: shopCookie })).json();
+        return [...all.trailers.flatMap((x: { pieces: unknown[] }) => x.pieces), ...all.unassigned]
+          .find((p: { id: number }) => (p as { id: number }).id === saw) as { service_due: number };
+      };
+      assert.equal((await due()).service_due, 1);
+      assert.equal((await inject("GET", `/equipment/${saw}/service`, { cookie: shopCookie })).json().next_due[0].state, "due");
+      assert.equal((await log(shopCookie, entry({ equipment_id: saw, work: [{ type: "sharpen" }], description: "Sharpened again" }))).statusCode, 201);
+      assert.equal((await due()).service_due, 0, "the newest sharpening has no next date, so the old one is out of date");
+    });
+
+    test("void: a reason; it reopens the problems it closed; entries can't be changed or erased; photos are kept", async () => {
+      assert.equal((await inject("POST", `/equipment-service/${entryId}/void`, { cookie: shopCookie, body: {} })).statusCode, 400);
+      assert.equal((await inject("POST", `/equipment-service/${entryId}/void`, { cookie: supCookie, body: { reason: "x" } })).statusCode, 403);
+      const v = await inject("POST", `/equipment-service/${entryId}/void`, { cookie: shopCookie, body: { reason: "Wrong piece" } });
+      assert.deepEqual([v.statusCode, v.json().reopened], [200, 1]);
+      assert.equal((await inject("POST", `/equipment-service/${entryId}/void`, { cookie: shopCookie, body: { reason: "again" } })).statusCode, 409);
+      const open = (await inject("GET", "/equipment-findings", { cookie: shopCookie })).json();
+      assert.ok(open.some((f: { id: number }) => f.id === problemId), "the problem is open again");
+      const svc = (await inject("GET", `/equipment/${blower}/service`, { cookie: shopCookie })).json();
+      assert.equal(svc.entries[0].voided, true);
+      assert.deepEqual(svc.next_due, [], "a voided entry's next-due no longer counts");
+
+      await assert.rejects(q(`DELETE FROM equipment_service_logs WHERE id = $1`, [entryId]));
+      await assert.rejects(q(`UPDATE equipment_service_logs SET description = 'x' WHERE id = $1`, [entryId]));
+      await assert.rejects(q(`UPDATE equipment_service_logs SET void_reason = 'changed' WHERE id = $1`, [entryId]));
+      await assert.rejects(q(`DELETE FROM equipment_service_repairs WHERE service_log_id = $1`, [entryId]));
+      await assert.rejects(q(`DELETE FROM photos WHERE id = $1`, [entryPhoto]));
+      const reuse = await log(shopCookie, entry({ photos: [{ id: entryPhoto, caption: null }] }));
+      assert.equal(reuse.json().details?.code, "photos_missing", "a photo on one entry can't go on another");
+    });
+  });
 }
