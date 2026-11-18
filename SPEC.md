@@ -33,7 +33,8 @@ Crew sign-in has to be fast on a phone in a truck: pick your name, enter a 4–6
 - **Photos and signatures:** files on a Docker volume (`/data/uploads/yyyy/mm/<uuid>.jpg`), path stored in Postgres. Resize on the client to max 1600px JPEG before upload, as the prototype does. Keep it behind an interface so it can move to S3 or Azure Blob later.
 - **PDF:** server-side, render an HTML print template with headless Chromium (Playwright) → PDF
 - **Reverse proxy / TLS:** Caddy
-- **Backups:** nightly `pg_dump` plus an uploads tarball to a second location, keeping 30 days
+- **Backups:** nightly `pg_dump` plus an uploads tarball into `backups/` on the server, keeping 30 days (copy them off the
+  server for a second location; see docs/PHASE3-REVIEW.md)
 
 ### Remote access (decide early)
 
@@ -123,7 +124,8 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - Damage repairs (006) can't be edited or deleted, only ended (undo / voided entry) with who, when and why.
 - The database refuses to delete inspections, their checklist answers and damage marks, and any photo once it's attached
   (005). "Delete" in the app only marks an inspection deleted; it stays restorable for good, with every change kept as history.
-- Nightly backups (database + uploads) to a second location, and a restore is tested (done 2026-11-11 on Tyler's PC: restored
+- Nightly backups (database + uploads) into `backups/` on the server (the same disk as the data for now, Tyler's call
+  2026-11-17; copy them off the server for a true second location), and a restore is tested (done 2026-11-11 on Tyler's PC: restored
   data matched the backup row for row and file for file). A backup is written to a temp file and renamed only when complete,
   never overwrites an existing backup, and runs one at a time. A restore first saves the current data as a `_before-restore`
   backup, so a wrong restore can be undone.
@@ -144,6 +146,13 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
   problems the entry closed.
 - Truck status changes (015) are recorded by the database itself for every change, however it's made, and the history
   can't be edited or deleted. Trailer moves are kept with the other asset changes.
+- Phase 3 review (2026-11-18, docs/PHASE3-REVIEW.md): trucks, users and truck pictures can't be deleted in the database
+  either (017). A file written for a save that then fails is removed only once the database confirms nothing points at
+  it (the save may have gone through after all). Every photo upload gets its own file name, and a file's folder is
+  flushed after it's written. A photo already uploaded from a phone can be sent by whoever is signed in on it (shared
+  phones), and one cleaned up mid-save is simply uploaded again. The phone's offline cache keeps the newest 400 items,
+  so it can't grow until the browser clears the app's storage. A 60-minute burn-in (30 phones, bad signal, app crashes,
+  database restarts) checks that nothing is lost, duplicated or incomplete: `scripts/burnin.ts`.
 
 ## 5. Business rules
 
@@ -375,8 +384,9 @@ POST /service-logs/:id/void         {reason}                                    
      demand items added after that and still accepts answers to items retired since. A draft that doesn't say (made
      before this) needs every current item, as before. The original items can never be skipped this way (a claimed
      checklist time counts back at most 90 days). Separate checklists for yards and equipment come with those features.
-3. **Code review and hardening:** full code review; review and optimize performance while keeping stability; a burn-in test
-   (many simulated phones submitting with bad signal over hours) to prove nothing is lost or duplicated; data-loss review against §4a.
+3. **Code review and hardening (done 2026-11-18, docs/PHASE3-REVIEW.md):** full code review; review and optimize performance
+   while keeping stability; a burn-in test (many simulated phones submitting with bad signal over hours) to prove nothing
+   is lost or duplicated; data-loss review against §4a.
 4. Later: pull vehicle list and odometer from the **Geotab** API; Microsoft 365 / Entra ID SSO for supervisors and admins.
    (Moving off Tyler's machine is done: it runs on a DigitalOcean droplet since 2026-11-12.)
 5. **Wishlist (Tyler; not scheduled):** Yard and equipment inspections share one foundation: an inspection type for
@@ -476,7 +486,7 @@ POST /service-logs/:id/void         {reason}                                    
    inspections (built) → equipment checks (built) → maintenance log for equipment (built) → fleet management (status,
    trailers on trucks, supervisor reminders: built; lease details when Tyler has them) → incident reports once a sample
    form arrives.
-   Phase 3 (code review, burn-in) after those.
+   Phase 3 (code review, performance, burn-in, data-loss review): done 2026-11-18, see docs/PHASE3-REVIEW.md.
 
 ## 10. Acceptance checklist for MVP
 

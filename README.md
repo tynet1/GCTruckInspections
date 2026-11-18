@@ -50,7 +50,13 @@ drafts stay on the phone and upload when signal returns.
 | Maintenance log for equipment: the shop logs work on a piece (types of work, next due per type, cost, photos), closes its open problems ("Log fix"), void with a reason; "Service due" once a date passes; works offline | done |
 | Incident reports: vehicle incidents filed by supervisors; damage goes on the truck's record | waiting on a sample form |
 
-Build order and every answered question are in SPEC §9. Phase 3 after that: full code review, performance and a burn-in test.
+Build order and every answered question are in SPEC §9.
+
+## Phase 3: done (2026-11-18)
+
+Full code review, performance check with five years of data, a one-hour burn-in test (30 simulated phones on a bad
+connection while the app crashes and the database restarts), and a data-loss review against SPEC §4a. Findings and
+fixes: [docs/PHASE3-REVIEW.md](docs/PHASE3-REVIEW.md).
 
 ## Security and data safety
 
@@ -60,6 +66,8 @@ Build order and every answered question are in SPEC §9. Phase 3 after that: ful
 - Sign-in: lockout after 5 wrong tries (longer if it keeps happening that day), 20 wrong tries an hour per network,
   real client addresses behind Caddy and Cloudflare. Photo uploads: 1 GB per person a day, and they pause before the
   disk fills. HSTS over HTTPS. Details in SPEC §3.
+- Burn-in tested: phones on a bad connection, app crashes and database restarts lose or duplicate nothing
+  (`scripts/burnin.ts`, docs/PHASE3-REVIEW.md).
 
 ## Layout
 
@@ -80,7 +88,7 @@ public/              the web app (plain HTML/CSS/JS modules, no framework), serv
                      (inspections, maintenance, yard walks, equipment checks, equipment maintenance)
 db/migrations/       numbered SQL migrations, applied automatically on start (never edit one that has shipped)
 seed/vehicles.csv    trucks added on start if missing (never overwrites edits made in Admin)
-scripts/             backup.sh (nightly, run by the backup container), restore.sh
+scripts/             backup.sh (nightly, run by the backup container), restore.sh, burnin.ts (burn-in test)
 test/                API tests against a real Postgres, plus browser-file and CSV checks
 prototype/, reference/   the approved claude.ai prototype and the original paper forms
 ```
@@ -117,6 +125,14 @@ The tests need a throwaway Postgres; they wipe it. With Docker:
 docker run -d --name gc-unit-pg -e POSTGRES_USER=gc -e POSTGRES_PASSWORD=gctest -e POSTGRES_DB=gc_test -p 127.0.0.1:54330:5432 postgres:16-alpine
 TEST_DATABASE_URL=postgres://gc:gctest@localhost:54330/gc_test npm test
 docker rm -f -v gc-unit-pg
+```
+
+Burn-in test (needs its own empty database; about an hour):
+
+```bash
+docker run -d --name gc-burn-pg -e POSTGRES_USER=gc -e POSTGRES_PASSWORD=gctest -e POSTGRES_DB=gc_burn -p 127.0.0.1:54331:5432 postgres:16-alpine
+node scripts/burnin.ts --db postgres://gc:gctest@localhost:54331/gc_burn --minutes 60 --phones 30 --crash-every 5 --pg-container gc-burn-pg
+docker rm -f -v gc-burn-pg
 ```
 
 Changes under `public/` need a server restart so the service worker picks up the new version.

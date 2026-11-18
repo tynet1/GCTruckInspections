@@ -2,8 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { requireUser } from "../auth.ts";
 import { config } from "../config.ts";
 import { one, q } from "../db.ts";
-import { bad, conflict, HttpError, notFound, UUID_RE, uuidParam } from "../http.ts";
-import { files, imageType, newKey } from "../storage.ts";
+import { bad, HttpError, notFound, UUID_RE, uuidParam } from "../http.ts";
+import { discardUnlessUsed, files, imageType, newKey } from "../storage.ts";
 import { UNATTACHED } from "../photo-owners.ts";
 
 export default async function photoRoutes(app: FastifyInstance) {
@@ -25,20 +25,26 @@ export default async function photoRoutes(app: FastifyInstance) {
     const type = imageType(data);
     if (!type) throw bad("That file isn't a JPEG or PNG photo.");
 
-    const existing = await one(`SELECT id, uploaded_by FROM photos WHERE id = $1`, [id]);
-    if (existing) {
-      if (existing.uploaded_by !== user.id) throw conflict("Photo id already used.");
-      return reply.code(200).send({ id });
-    }
+    // Already here: a retry, or the same phone sending it again with someone else signed in (a shared phone whose
+    // first user's session ended). The stored photo is never replaced. Photo ids are random and only ever known to
+    // the phone that took the photo, so this hands nobody else's photo to anyone.
+    if (await one(`SELECT 1 FROM photos WHERE id = $1`, [id])) return reply.code(200).send({ id });
     await assertRoomFor(user.id, data.length, req.log);
-    const key = newKey(type.ext, id);
+    // A new file name for every upload: a file is never shared by two rows or written over. (With the photo id as the
+    // name, the orphan clean-up could remove an old upload's file just after the phone sent the photo again.)
+    const key = newKey(type.ext);
     await files.put(key, data);
-    await q(
+    const ins = await one(
       `INSERT INTO photos (id, file_path, content_type, bytes, uploaded_by) VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id) DO NOTHING`,
+       ON CONFLICT (id) DO NOTHING RETURNING id`,
       [id, key, type.mime, data.length, user.id],
-    );
-    return reply.code(201).send({ id });
+    ).catch(async (e) => {
+      await discardUnlessUsed(key, async () => !!(await one(`SELECT 1 FROM photos WHERE file_path = $1`, [key])));
+      throw e;
+    });
+    // The same photo arrived twice at once and the other upload stored it: this copy isn't needed.
+    if (!ins) await discardUnlessUsed(key, async () => !!(await one(`SELECT 1 FROM photos WHERE file_path = $1`, [key])));
+    return reply.code(ins ? 201 : 200).send({ id });
   });
 
   /**

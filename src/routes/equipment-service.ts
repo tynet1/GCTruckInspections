@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { requireRole } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { bad, conflict, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE } from "../http.ts";
-import { UNATTACHED } from "../photo-owners.ts";
+import { attachFailed, UNATTACHED } from "../photo-owners.ts";
 import { money } from "./service.ts";
 
 export const EQUIPMENT_WORK = [
@@ -97,7 +97,7 @@ export async function saveEntry(input: EntryIn, userId: number) {
   if (!(await one(`SELECT 1 FROM equipment WHERE id = $1 AND active`, [input.equipment_id]))) throw bad("That equipment isn't in use.");
   if (input.photos.length) {
     const ids = input.photos.map((p) => p.id);
-    const ok = new Set((await q(`SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2 AND ${UNATTACHED}`, [ids, userId]))
+    const ok = new Set((await q(`SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND ${UNATTACHED}`, [ids]))
       .map((r) => r.id));
     const notReady = ids.filter((id) => !ok.has(id));
     if (notReady.length) throw new HttpError(422, "Some photos haven't finished uploading yet.", { code: "photos_missing", photos: notReady });
@@ -132,7 +132,7 @@ export async function saveEntry(input: EntryIn, userId: number) {
       }
       for (const p of input.photos) {
         const r = await c.query(`UPDATE photos SET equipment_service_log_id = $2, caption = $3 WHERE id = $1 AND ${UNATTACHED}`, [p.id, id, p.caption]);
-        if (r.rowCount !== 1) throw conflict("A photo was attached to something else. Remove it and try again.");
+        if (r.rowCount !== 1) throw await attachFailed(c, p.id, "A photo was attached to something else. Remove it and try again.");
       }
       return { id, fixed: items.length, duplicate: false };
     });

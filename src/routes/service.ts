@@ -6,7 +6,7 @@ import type { PoolClient } from "pg";
 import { requireRole } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { bad, conflict, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE } from "../http.ts";
-import { isUnattached, OWNER_COLUMNS, UNATTACHED } from "../photo-owners.ts";
+import { attachFailed, isUnattached, OWNER_COLUMNS, UNATTACHED } from "../photo-owners.ts";
 
 export const CATEGORIES: Record<string, string> = {
   oil_change: "Oil change",
@@ -167,16 +167,15 @@ function photoList(v: unknown): EntryPhoto[] {
   });
 }
 
-/** Photos must be uploaded by this user and not attached anywhere else (or already on this entry). */
-async function checkPhotos(photos: { id: string }[], userId: number, entryId: number | null) {
+/** Photos must be uploaded and not attached anywhere else (or already on this entry). */
+async function checkPhotos(photos: { id: string }[], entryId: number | null) {
   if (!photos.length) return;
   const ids = photos.map((p) => p.id);
   const found = await q(
     `SELECT id, uploaded_by, ${OWNER_COLUMNS} FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
   const ok = new Set(found
-    // Free photos this user uploaded, or ones already on this entry (when editing it).
-    .filter((f) => isUnattached(f, ["service_log_id"])
-      && (f.service_log_id == null ? f.uploaded_by === userId : f.service_log_id === entryId))
+    // Free photos (uploaded from the phone, whoever is signed in now), or ones already on this entry (when editing it).
+    .filter((f) => isUnattached(f, ["service_log_id"]) && (f.service_log_id == null || f.service_log_id === entryId))
     .map((f) => f.id));
   const notReady = ids.filter((id) => !ok.has(id));
   if (notReady.length) {
@@ -185,16 +184,16 @@ async function checkPhotos(photos: { id: string }[], userId: number, entryId: nu
 }
 
 /** Attach new photos to the entry; a photo of a fixed damage mark also points at that damage repair. */
-async function attachPhotos(c: PoolClient, entryId: number, photos: EntryPhoto[], userId: number, repairOf = new Map<number, number>()) {
+async function attachPhotos(c: PoolClient, entryId: number, photos: EntryPhoto[], repairOf = new Map<number, number>()) {
   for (const p of photos) {
     const r = await c.query(
-      `UPDATE photos SET service_log_id = $2, caption = $3, damage_repair_id = $5
-        WHERE id = $1 AND uploaded_by = $4 AND ${UNATTACHED}`,
-      [p.id, entryId, p.caption, userId, p.damage_mark_id ? repairOf.get(p.damage_mark_id) ?? null : null],
+      `UPDATE photos SET service_log_id = $2, caption = $3, damage_repair_id = $4
+        WHERE id = $1 AND ${UNATTACHED}`,
+      [p.id, entryId, p.caption, p.damage_mark_id ? repairOf.get(p.damage_mark_id) ?? null : null],
     );
     if (r.rowCount === 1) continue;
     const mine = await c.query(`SELECT 1 FROM photos WHERE id = $1 AND service_log_id = $2`, [p.id, entryId]);
-    if (!mine.rowCount) throw conflict("A photo couldn't be attached. Remove it and add it again.");
+    if (!mine.rowCount) throw await attachFailed(c, p.id, "A photo couldn't be attached. Remove it and add it again.");
   }
 }
 
@@ -518,7 +517,7 @@ export default async function serviceRoutes(app: FastifyInstance) {
     const repairs = idList(b.repair_item_ids, "repair_item_ids", 100);
     const damage = idList(b.damage_mark_ids, "damage_mark_ids", 50);
     const photos = photoList(b.photos);
-    await checkPhotos(photos, user.id, null);
+    await checkPhotos(photos, null);
 
     try {
       const id = await tx(async (c) => {
@@ -533,7 +532,7 @@ export default async function serviceRoutes(app: FastifyInstance) {
         const newId: number = ins.rows[0].id;
         await attachRepairs(c, newId, vehicleId, repairs, user.id, String(f.description));
         const repairOf = await attachDamage(c, newId, vehicleId, damage, photos, user.id, String(f.description));
-        await attachPhotos(c, newId, photos, user.id, repairOf);
+        await attachPhotos(c, newId, photos, repairOf);
         return newId;
       });
       return reply.code(201).send({ id, duplicate: false });
@@ -556,7 +555,7 @@ export default async function serviceRoutes(app: FastifyInstance) {
     const repairs = idList(b.repair_item_ids, "repair_item_ids", 100);
     const damage = idList(b.damage_mark_ids, "damage_mark_ids", 50);
     const photos = photoList(b.photos);
-    await checkPhotos(photos, user.id, id);
+    await checkPhotos(photos, id);
 
     await tx(async (c) => {
       const cur = (await c.query(`SELECT * FROM service_logs WHERE id = $1 FOR UPDATE`, [id])).rows[0];
@@ -577,7 +576,7 @@ export default async function serviceRoutes(app: FastifyInstance) {
       const work = String(f.description ?? cur.description);
       await attachRepairs(c, id, cur.vehicle_id, repairs, user.id, work);
       const repairOf = await attachDamage(c, id, cur.vehicle_id, damage, photos, user.id, work);
-      await attachPhotos(c, id, photos, user.id, repairOf);
+      await attachPhotos(c, id, photos, repairOf);
     });
     return loadEntry(id);
   });

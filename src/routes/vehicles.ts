@@ -3,7 +3,7 @@ import { requireRole, requireUser } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { defaultDiagram, diagramUrl, readDiagram } from "../diagrams.ts";
 import { bad, conflict, DATE_RE, HttpError, idParam, isValidDate, notFound, obj, reqStr, str, UUID_RE } from "../http.ts";
-import { UNATTACHED } from "../photo-owners.ts";
+import { attachFailed, UNATTACHED } from "../photo-owners.ts";
 
 const VEHICLE_COLS = `
   vs.id, vs.truck_code, vs.unit, vs.vin, vs.plate, vs.year, vs.make, vs.model,
@@ -133,11 +133,7 @@ async function markRepaired(markId: number, userId: number, body: unknown) {
 
   const dup = await one(`SELECT id FROM damage_repairs WHERE client_id = $1`, [clientId]);
   if (dup) return { id: dup.id, duplicate: true };
-  const ready = await q(
-    `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
-        AND ${UNATTACHED}`,
-    [photoIds, userId],
-  );
+  const ready = await q(`SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND ${UNATTACHED}`, [photoIds]);
   const missing = photoIds.filter((id) => !ready.some((r) => r.id === id));
   if (missing.length) throw new HttpError(422, "The photo hasn't finished uploading yet.", { code: "photos_missing", photos: missing });
 
@@ -161,11 +157,10 @@ async function markRepaired(markId: number, userId: number, body: unknown) {
     const id: number = ins.rows[0].id;
     for (const p of photoIds) {
       const r = await c.query(
-        `UPDATE photos SET damage_repair_id = $2 WHERE id = $1 AND uploaded_by = $3
-            AND ${UNATTACHED}`,
-        [p, id, userId],
+        `UPDATE photos SET damage_repair_id = $2 WHERE id = $1 AND ${UNATTACHED}`,
+        [p, id],
       );
-      if (r.rowCount !== 1) throw conflict("A photo couldn't be attached. Add it again.");
+      if (r.rowCount !== 1) throw await attachFailed(c, p, "A photo couldn't be attached. Add it again.");
     }
     return { id, duplicate: false };
   });
@@ -204,11 +199,7 @@ export async function updateRegistration(vehicleId: number, userId: number, body
     [clientId]);
   if (dup) return { id: dup.id as number, registration_expires: dup.registration_expires as string | null, duplicate: true };
   if (photoIds.length) {
-    const ready = await q(
-      `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
-          AND ${UNATTACHED}`,
-      [photoIds, userId],
-    );
+    const ready = await q(`SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND ${UNATTACHED}`, [photoIds]);
     const missing = photoIds.filter((id) => !ready.some((r) => r.id === id));
     if (missing.length) throw new HttpError(422, "The photo hasn't finished uploading yet.", { code: "photos_missing", photos: missing });
   }
@@ -240,11 +231,10 @@ export async function updateRegistration(vehicleId: number, userId: number, body
     await c.query(`UPDATE vehicles SET registration_expires = $2, updated_at = now() WHERE id = $1`, [vehicleId, expires]);
     for (const p of photoIds) {
       const r = await c.query(
-        `UPDATE photos SET registration_change_id = $2 WHERE id = $1 AND uploaded_by = $3
-            AND ${UNATTACHED}`,
-        [p, id, userId],
+        `UPDATE photos SET registration_change_id = $2 WHERE id = $1 AND ${UNATTACHED}`,
+        [p, id],
       );
-      if (r.rowCount !== 1) throw conflict("A photo couldn't be attached. Add it again.");
+      if (r.rowCount !== 1) throw await attachFailed(c, p, "A photo couldn't be attached. Add it again.");
     }
     return { id, registration_expires: expires, duplicate: false };
   });

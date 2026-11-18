@@ -47,7 +47,8 @@ npm run user -- add --name "X" --role crew --pin 1234
   such as `gc-test` on port 8080). Claude reaches it from Tyler's PC with its own SSH key (alias `gc-droplet`, app in `/opt/gctruckinspections`); deploy
   with `docs/DEPLOY.md` §6 (labeled backup first, rebuild under `nohup`, then compare the data before and after).
 - Phase 1 (MVP) is built, plus trailer types and branding. Phase 2: the maintenance log is built (`src/routes/service.ts`,
-  `public/js/svc.js`, `views/service-*.js`), and so is batch PDF export (`views/export.js`, `public/js/zip.js`). Fleet
-  management is next; confirm the open fleet-management questions in SPEC §9 with Tyler before building it.
-  Phase 3 is a full code review, performance/stability work and a burn-in test.
+  `public/js/svc.js`, `views/service-*.js`), and so is batch PDF export (`views/export.js`, `public/js/zip.js`), and
+  everything since (see SPEC §9: repair tickets, checklist editor, yard walks, equipment, fleet status/reminders).
+  Phase 3 (code review, performance, burn-in, data-loss review) was done 2026-11-18: `docs/PHASE3-REVIEW.md`. Rerun
+  `scripts/burnin.ts` after any change to how records, photos or the outboxes are saved.
 - Ask Tyler before choosing a remote-access method other than Cloudflare Tunnel, or before adding paid services.

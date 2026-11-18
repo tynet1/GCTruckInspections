@@ -7,8 +7,8 @@ import {
   bad, conflict, DATE_RE, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE, uuidParam,
 } from "../http.ts";
 import { renderInspectionPdf } from "../pdf.ts";
-import { decodePngDataUrl, files, newKey } from "../storage.ts";
-import { isUnattached, OWNER_COLUMNS, UNATTACHED } from "../photo-owners.ts";
+import { decodePngDataUrl, discardUnlessUsed, files, newKey } from "../storage.ts";
+import { attachFailed, isUnattached, OWNER_COLUMNS, UNATTACHED } from "../photo-owners.ts";
 
 type Section = "exterior" | "interior" | "trailer";
 
@@ -185,12 +185,13 @@ export async function submitInspection(input: SubmitInput, userId: number) {
     if (p.checklist_item_id != null && !answered.has(p.checklist_item_id)) throw bad("Photo points at a checklist item that isn't in this inspection.");
   }
 
-  // Photos must already be uploaded (by this user) and not attached to anything yet.
+  // Photos must already be uploaded and not attached to anything yet. (Whoever is signed in on the phone may send them:
+  // a shared phone's queue can go out under the next person to sign in. Photo ids are random and known only to that phone.)
   if (input.photos.length) {
     const ids = input.photos.map((p) => p.id);
     const found = await q(
       `SELECT id, uploaded_by, ${OWNER_COLUMNS} FROM photos WHERE id = ANY($1::uuid[])`, [ids]);
-    const ok = new Set(found.filter((f) => isUnattached(f) && f.uploaded_by === userId).map((f) => f.id));
+    const ok = new Set(found.filter((f) => isUnattached(f)).map((f) => f.id));
     const notReady = ids.filter((id) => !ok.has(id));
     if (notReady.length) {
       throw new HttpError(422, "Some photos haven't finished uploading yet.", { code: "photos_missing", photos: notReady });
@@ -233,7 +234,7 @@ export async function submitInspection(input: SubmitInput, userId: number) {
       return { id, mileage_flagged: ins.rows[0].mileage_flagged as boolean, duplicate: false };
     });
   } catch (e) {
-    await files.remove(sigKey).catch(() => {});
+    await discardUnlessUsed(sigKey, async () => !!(await one(`SELECT 1 FROM inspections WHERE employee_signature_path = $1`, [sigKey])));
     if (e instanceof DuplicateSubmit) {
       const d = await existingByClientId(input.client_id);
       if (d) return { ...d, duplicate: true };
@@ -275,7 +276,7 @@ async function insertChildren(c: PoolClient, id: string, input: SubmitInput, che
       [p.id, id, p.caption, p.damage_key ? markIds.get(p.damage_key) ?? null : null,
         p.checklist_item_id ? itemIds.get(p.checklist_item_id) ?? null : null],
     );
-    if (r.rowCount !== 1) throw conflict("A photo was attached to another inspection. Remove it and try again.");
+    if (r.rowCount !== 1) throw await attachFailed(c, p.id, "A photo was attached to another inspection. Remove it and try again.");
   }
 }
 

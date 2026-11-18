@@ -2367,4 +2367,74 @@ if (!url) {
       assert.equal(r.items[r.items.length - 1].state === "soon" || r.soon === 0, true, "due ones come first");
     });
   });
+  describe("phase 3 data safety", () => {
+    test("a photo uploaded under one sign-in can be sent under the next (a shared phone's queue)", async () => {
+      const { res: up, id } = await uploadPhoto(crewCookie);
+      assert.equal(up.statusCode, 201);
+      const before = await one(`SELECT file_path, uploaded_by FROM photos WHERE id = $1`, [id]);
+      const again = await uploadPhoto(supCookie, id);
+      assert.equal(again.res.statusCode, 200, "already here: not refused, not stored twice");
+      const after = await one(`SELECT file_path, uploaded_by FROM photos WHERE id = $1`, [id]);
+      assert.deepEqual(after, before, "the stored photo is never replaced");
+      // The checklist as it is now (earlier tests added items).
+      const items = (await q(`SELECT id FROM checklist_items WHERE active AND section IN ('exterior', 'interior')`))
+        .map((c) => ({ checklist_item_id: c.id, result: "ok" }));
+      const res = await inject("POST", "/inspections", { cookie: supCookie, body: submitBody({ items, photos: [{ id, caption: "From the crew's upload" }] }) });
+      assert.equal(res.statusCode, 201, res.body);
+      assert.equal((await one(`SELECT inspection_id FROM photos WHERE id = $1`, [id])).inspection_id, res.json().id);
+      // Still only once: an attached photo can't go on anything else, whoever asks.
+      const reuse = await inject("POST", "/inspections", { cookie: crewCookie, body: submitBody({ items, photos: [{ id }] }) });
+      assert.equal(reuse.json().details?.code, "photos_missing");
+    });
+
+    test("every upload gets its own file name", async () => {
+      const { id } = await uploadPhoto(crewCookie);
+      const p = await one(`SELECT file_path FROM photos WHERE id = $1`, [id]);
+      assert.ok(!p.file_path.includes(id), "the photo id isn't the file name, so a re-upload never lands on an old file");
+      const { files: store } = await import("../src/storage.ts");
+      assert.ok((await store.read(p.file_path)).length > 0);
+    });
+
+    test("a file written for a failed save is removed only when nothing points at it", async () => {
+      const { discardUnlessUsed, files: store, newKey } = await import("../src/storage.ts");
+      const exists = async (k: string) => store.read(k).then(() => true, () => false);
+      const [a, b, c] = [newKey("png"), newKey("png"), newKey("png")];
+      for (const k of [a, b, c]) await store.put(k, JPEG);
+      await discardUnlessUsed(a, async () => true);
+      await discardUnlessUsed(b, async () => { throw new Error("database down"); });
+      await discardUnlessUsed(c, async () => false);
+      assert.equal(await exists(a), true, "the save went through after all: kept");
+      assert.equal(await exists(b), true, "can't tell: kept");
+      assert.equal(await exists(c), false, "nothing uses it: removed");
+    });
+
+    test("a photo that vanished mid-save makes the phone upload it again; one on another record is refused", async () => {
+      const { attachFailed } = await import("../src/photo-owners.ts");
+      const gone = await attachFailed(pool, randomUUID(), "taken");
+      assert.equal(gone.statusCode, 422);
+      assert.equal((gone.details as { code: string }).code, "photos_missing");
+      const attached = await one(`SELECT id FROM photos WHERE inspection_id IS NOT NULL LIMIT 1`);
+      const taken = await attachFailed(pool, attached.id, "taken");
+      assert.equal(taken.statusCode, 409);
+      assert.equal(taken.message, "taken");
+    });
+
+    test("trucks, users and truck pictures can't be deleted from the database either (017)", async () => {
+      const v = await one(`INSERT INTO vehicles (truck_code, active) VALUES ('ZZ-DEL', false) RETURNING id`);
+      await assert.rejects(q(`DELETE FROM vehicles WHERE id = $1`, [v.id]), /can't be deleted/);
+      const u = await one(`INSERT INTO users (name, role, active, pin_hash) VALUES ('Never Deleted', 'crew', false, 'none') RETURNING id`);
+      await assert.rejects(q(`DELETE FROM users WHERE id = $1`, [u.id]), /can't be deleted/);
+      const d = await one(`SELECT id FROM diagrams LIMIT 1`);
+      await assert.rejects(q(`DELETE FROM diagrams WHERE id = $1`, [d.id]), /can't be deleted/);
+    });
+
+    test("the truck list's open repair counts match a count truck by truck (016)", async () => {
+      const rows = await q(`SELECT vs.id, vs.open_repairs,
+          (SELECT count(*) FROM inspection_items ii JOIN live_inspections i ON i.id = ii.inspection_id
+            WHERE i.vehicle_id = vs.id AND ii.result = 'repair' AND ii.resolved_at IS NULL) AS direct
+          FROM vehicle_status vs`);
+      assert.ok(rows.some((r) => r.direct > 0), "some trucks have open repairs in the test data");
+      for (const r of rows) assert.equal(r.open_repairs, r.direct, `truck ${r.id}`);
+    });
+  });
 }

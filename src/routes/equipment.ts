@@ -8,7 +8,7 @@ import type { PoolClient } from "pg";
 import { requireRole } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { bad, conflict, DATE_RE, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE, uuidParam } from "../http.ts";
-import { UNATTACHED } from "../photo-owners.ts";
+import { attachFailed, UNATTACHED } from "../photo-owners.ts";
 import { EQUIPMENT_SECTIONS, EQUIPMENT_TYPES } from "./checklist.ts";
 
 const TYPE_KEYS: string[] = EQUIPMENT_TYPES.map((t) => t.key);
@@ -176,7 +176,7 @@ export async function submitCheck(input: CheckSubmit, userId: number) {
   }
   if (input.photos.length) {
     const pids = input.photos.map((p) => p.id);
-    const ok = new Set((await q(`SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2 AND ${UNATTACHED}`, [pids, userId]))
+    const ok = new Set((await q(`SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND ${UNATTACHED}`, [pids]))
       .map((r) => r.id));
     const notReady = pids.filter((id) => !ok.has(id));
     if (notReady.length) throw new HttpError(422, "Some photos haven't finished uploading yet.", { code: "photos_missing", photos: notReady });
@@ -218,7 +218,7 @@ export async function submitCheck(input: CheckSubmit, userId: number) {
           `UPDATE photos SET equipment_check_id = $2, equipment_check_item_id = $3, caption = $4 WHERE id = $1 AND ${UNATTACHED}`,
           [ph.id, id, ph.checklist_item_id ? itemIds.get(`${ph.equipment_id}:${ph.checklist_item_id}`) ?? null : null, ph.caption],
         );
-        if (r.rowCount !== 1) throw conflict("A photo was attached to something else. Remove it and try again.");
+        if (r.rowCount !== 1) throw await attachFailed(c, ph.id, "A photo was attached to something else. Remove it and try again.");
       }
       return { id, failed, duplicate: false };
     });

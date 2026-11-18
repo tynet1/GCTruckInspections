@@ -7,6 +7,9 @@
 const VERSION = "__BUILD_VERSION__";
 const SHELL = `gc-shell-${VERSION}`;
 const RUNTIME = "gc-runtime";
+// Photos and API answers kept for offline use: the newest few hundred. Without a cap a busy phone would keep every
+// photo it ever showed, and a browser short on space may clear everything the app stores, unsent work included.
+const RUNTIME_MAX = 400;
 
 const SHELL_FILES = [
   "/",
@@ -78,6 +81,15 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+let trimming = null;
+function trim(cache) {
+  if (trimming) return;
+  trimming = (async () => {
+    const keys = await cache.keys(); // oldest first; an entry stored again moves to the end
+    for (const k of keys.slice(0, Math.max(0, keys.length - RUNTIME_MAX))) await cache.delete(k);
+  })().catch(() => {}).finally(() => { trimming = null; });
+}
+
 function timeout(ms) {
   return new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), ms));
 }
@@ -85,7 +97,7 @@ function timeout(ms) {
 async function networkFirst(req, ms) {
   const cache = await caches.open(RUNTIME);
   const net = fetch(req).then((res) => {
-    if (res.ok) cache.put(req, res.clone());
+    if (res.ok) cache.put(req, res.clone()).then(() => trim(cache), () => {});
     return res;
   });
   try {
@@ -102,7 +114,7 @@ async function cacheFirst(req, cacheName) {
   const hit = await cache.match(req);
   if (hit) return hit;
   const res = await fetch(req);
-  if (res.ok) cache.put(req, res.clone());
+  if (res.ok) cache.put(req, res.clone()).then(() => trim(cache), () => {});
   return res;
 }
 
@@ -114,7 +126,8 @@ self.addEventListener("fetch", (event) => {
   const p = url.pathname;
 
   if (p.startsWith("/api/")) {
-    if (/\/pdf$/.test(p) || p === "/api/auth/logout") return;
+    // PDFs and CSV downloads go straight to the network (big, and never needed offline).
+    if (/\/pdf$/.test(p) || p.startsWith("/api/export/") || p === "/api/auth/logout") return;
     if (/^\/api\/photos\/|^\/api\/inspections\/[^/]+\/signature\/|^\/api\/yard-inspections\/[^/]+\/signature$|^\/api\/diagrams\/\d+\/image$/.test(p)
       || (p === "/api/branding/logo" && url.searchParams.has("v"))) {
       event.respondWith(cacheFirst(req, RUNTIME));

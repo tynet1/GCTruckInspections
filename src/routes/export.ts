@@ -228,14 +228,18 @@ export default async function exportRoutes(app: FastifyInstance) {
               CASE WHEN v.pulls_trailer THEN COALESCE(td.name, (SELECT name FROM diagrams WHERE kind = 'trailer' ORDER BY id LIMIT 1)) END AS trailer_type,
               v.active, li.inspection_date AS last_inspection_date, li.status AS last_status,
               GREATEST(li.mileage, (SELECT max(s.mileage) FROM service_logs s WHERE s.vehicle_id = v.id AND s.voided_at IS NULL)) AS last_mileage,
-              (SELECT count(*) FROM inspection_items ii JOIN live_inspections i ON i.id = ii.inspection_id
-                WHERE i.vehicle_id = v.id AND ii.result = 'repair' AND ii.resolved_at IS NULL) AS open_repairs,
-              (SELECT count(*) FROM damage_marks dm JOIN live_inspections i ON i.id = dm.inspection_id
-                WHERE i.vehicle_id = v.id
-                  AND NOT EXISTS (SELECT 1 FROM damage_repairs dr WHERE dr.damage_mark_id = dm.id AND dr.active)) AS damage_on_file,
+              coalesce(orc.n, 0) AS open_repairs, coalesce(dof.n, 0) AS damage_on_file,
               ls.service_date AS last_service_date
          FROM vehicles v
          LEFT JOIN diagrams td ON td.id = v.trailer_diagram_id
+         -- Counted per truck from the open repairs and the damage marks, not truck by truck through every inspection.
+         LEFT JOIN (
+           SELECT i.vehicle_id, count(*) AS n FROM inspection_items ii JOIN live_inspections i ON i.id = ii.inspection_id
+            WHERE ii.result = 'repair' AND ii.resolved_at IS NULL GROUP BY i.vehicle_id) orc ON orc.vehicle_id = v.id
+         LEFT JOIN (
+           SELECT i.vehicle_id, count(*) AS n FROM damage_marks dm JOIN live_inspections i ON i.id = dm.inspection_id
+            WHERE NOT EXISTS (SELECT 1 FROM damage_repairs dr WHERE dr.damage_mark_id = dm.id AND dr.active)
+            GROUP BY i.vehicle_id) dof ON dof.vehicle_id = v.id
          LEFT JOIN LATERAL (
            SELECT inspection_date, mileage, status FROM live_inspections
             WHERE vehicle_id = v.id ORDER BY inspection_date DESC, created_at DESC LIMIT 1) li ON true

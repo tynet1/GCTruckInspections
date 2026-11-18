@@ -7,10 +7,10 @@ import { requireRole, requireUser } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { bad, conflict, DATE_RE, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE, uuidParam } from "../http.ts";
 import { renderHtmlToPdf } from "../pdf.ts";
-import { decodePngDataUrl, files, newKey } from "../storage.ts";
+import { decodePngDataUrl, discardUnlessUsed, files, newKey } from "../storage.ts";
 import { yardPdfHtml } from "../yard-pdf.ts";
 import { YARD_SECTIONS } from "./checklist.ts";
-import { UNATTACHED } from "../photo-owners.ts";
+import { attachFailed, UNATTACHED } from "../photo-owners.ts";
 
 interface ItemIn { checklist_item_id: number; result: "ok" | "repair"; note: string | null }
 interface PhotoIn { id: string; caption: string | null; checklist_item_id: number | null }
@@ -119,9 +119,8 @@ export async function submitYardInspection(input: YardSubmit, userId: number) {
   if (input.photos.length) {
     const ids = input.photos.map((p) => p.id);
     const found = await q(
-      `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND uploaded_by = $2
-          AND ${UNATTACHED}`,
-      [ids, userId],
+      `SELECT id FROM photos WHERE id = ANY($1::uuid[]) AND ${UNATTACHED}`,
+      [ids],
     );
     const ok = new Set(found.map((f) => f.id));
     const notReady = ids.filter((id) => !ok.has(id));
@@ -156,12 +155,12 @@ export async function submitYardInspection(input: YardSubmit, userId: number) {
             WHERE id = $1 AND ${UNATTACHED}`,
           [p.id, id, p.checklist_item_id ? itemIds.get(p.checklist_item_id) ?? null : null, p.caption],
         );
-        if (r.rowCount !== 1) throw conflict("A photo was attached to something else. Remove it and try again.");
+        if (r.rowCount !== 1) throw await attachFailed(c, p.id, "A photo was attached to something else. Remove it and try again.");
       }
       return { id, failed: input.items.filter((i) => i.result === "repair").length, duplicate: false };
     });
   } catch (e) {
-    await files.remove(sigKey).catch(() => {});
+    await discardUnlessUsed(sigKey, async () => !!(await one(`SELECT 1 FROM yard_inspections WHERE signature_path = $1`, [sigKey])));
     if (e instanceof DuplicateSubmit) {
       const d = await byClientId(input.client_id);
       if (d) return { id: d.id, duplicate: true };
