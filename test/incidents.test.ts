@@ -194,7 +194,7 @@ if (!url) {
       assert.equal(board[0].incident_id, null, "the shop sees the damage, not the report");
       assert.equal((await inject("GET", "/incident-repairs", { cookie: sup })).json()[0].incident_id, id);
       const csv = await inject("GET", "/export/repairs.csv", { cookie: sup });
-      assert.match(csv.body, /Incident damage,Damage 1,Rear bumper dented/);
+      assert.match(csv.body, /Incident damage,Damage,Rear bumper dented/);
       assert.match(csv.body, new RegExp(`incident/${id}`));
     });
 
@@ -332,6 +332,45 @@ if (!url) {
       assert.ok(h2.includes("Employee Refusal of Medical Treatment"));
       assert.ok(h2.includes("Sore neck"));
       await inject("POST", `/incidents/${hurt.json().id}/archive`, { cookie: sup, body: {} });
+    });
+
+    test("incident damage goes on a repair ticket only when it's picked (019)", async () => {
+      const { loadTicket } = await import("../src/routes/tickets.ts");
+      const { ticketPdfHtml } = await import("../src/ticket-pdf.ts");
+      const filed = await inject("POST", "/incidents", { cookie: sup, body: report({ damage: [
+        { key: "a", diagram: "truck", x: 0.3, y: 0.3, note: "Hood dented" }, { key: "b", diagram: "truck", x: 0.4, y: 0.4, note: "Grille cracked" }] }) });
+      const marks = (await q(`SELECT id FROM damage_marks WHERE incident_id = $1 ORDER BY seq`, [filed.json().id])).map((r) => r.id);
+      const ticket = (body: Record<string, unknown>) => inject("POST", "/repair-tickets", { cookie: shop, body: { client_id: randomUUID(), vehicle_id: truck, ...body } });
+
+      assert.equal((await ticket({ item_ids: [], damage_ids: [] })).statusCode, 400, "something has to be picked");
+      const other = (await one(`SELECT id FROM vehicles WHERE truck_code <> 'AZ018' AND active LIMIT 1`)).id;
+      const wrongTruck = await inject("POST", "/repair-tickets", { cookie: shop, body: { client_id: randomUUID(), vehicle_id: other, damage_ids: [marks[0]] } });
+      assert.equal(wrongTruck.statusCode, 422);
+      assert.equal(wrongTruck.json().details.code, "bad_damage");
+      assert.equal((await ticket({ damage_ids: [markIds[0]] })).statusCode, 422, "already repaired");
+
+      // Only the picked piece goes on it.
+      const made = await ticket({ damage_ids: [marks[1]], sent_to: "Body shop" });
+      assert.equal(made.statusCode, 201, made.body);
+      const t = (await loadTicket(made.json().id))!;
+      assert.deepEqual(t.items.map((i) => [i.kind, i.id, i.position, i.label]), [["damage", marks[1], 1, "Damage"]]);
+      assert.equal(t.items[0].incident_id, filed.json().id);
+      const html = await ticketPdfHtml(t);
+      assert.ok(html.includes("Incident damage") && html.includes("Grille cracked") && !html.includes("Hood dented"));
+      const pills = (await inject("GET", "/incident-repairs", { cookie: sup })).json();
+      assert.deepEqual(pills.find((m: { id: number }) => m.id === marks[1]).ticket_ids, [made.json().id]);
+      assert.deepEqual(pills.find((m: { id: number }) => m.id === marks[0]).ticket_ids, []);
+      const onTruck = (await inject("GET", `/vehicles/${truck}`, { cookie: sup })).json().damage.find((m: { id: number }) => m.id === marks[1]);
+      assert.deepEqual(onTruck.ticket_ids, [made.json().id]);
+
+      const listed = async () => (await inject("GET", `/vehicles/${truck}/repair-tickets`, { cookie: sup })).json().find((x: { id: number }) => x.id === made.json().id);
+      assert.deepEqual([(await listed()).items, (await listed()).fixed], [1, 0]);
+      const photo = await uploadPhoto(sup);
+      await inject("POST", `/damage-marks/${marks[1]}/repair`, { cookie: sup, body: { client_id: randomUUID(), note: "New grille", photo_ids: [photo] } });
+      assert.deepEqual([(await listed()).items, (await listed()).fixed], [1, 1]);
+      assert.ok((await loadTicket(made.json().id))!.items[0].resolved_at);
+      await assert.rejects(q(`DELETE FROM repair_ticket_damage WHERE ticket_id = $1`, [made.json().id]), /can't be deleted/);
+      await inject("POST", `/incidents/${filed.json().id}/archive`, { cookie: sup, body: {} });
     });
 
     test("the PDF downloads (Chromium)", { timeout: 120_000 }, async () => {

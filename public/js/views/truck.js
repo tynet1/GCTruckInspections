@@ -70,7 +70,7 @@ export async function render(app, id) {
   // Damage from an incident report is a repair until it's fixed (018); it's also listed under damage on file.
   const incDamage = (data.damage || []).filter((m) => m.incident_id && !m.repair).reverse();
   const nOpen = openRepairs.length + incDamage.length;
-  h += `${can.seeService() && openRepairs.length
+  h += `${can.seeService() && nOpen
     ? `<div class="h2row"><h2>Open repairs (${nOpen})</h2><button class="link" id="mkTicket">Make repair ticket</button></div>`
     : `<h2>Open repairs (${nOpen})</h2>`}<div class="card">${nOpen
     ? `<ul class="repairlist">${incDamage.map((m) => incidentDamageItem(v, m)).join("")}${openRepairs.map((r) => `<li><div class="spread"><div><b>${esc(r.label)}</b> <span class="small muted">(${esc(SECTION_TITLES[r.section] || r.section)})</span>${ticketPills(r)}
@@ -125,7 +125,9 @@ export async function render(app, id) {
   }));
   const mk = $("#mkTicket");
   if (mk) mk.onclick = async () => {
-    const tid = await makeTicket(v, openRepairs);
+    const incDmg = (data.damage || []).filter((m) => m.incident_id && !m.repair)
+      .map((m) => ({ id: m.id, diagram: m.diagram, n: m.n, note: m.note, date: m.inspection_date, ticket_ids: m.ticket_ids }));
+    const tid = await makeTicket(v, openRepairs, { damage: incDmg });
     if (tid && !stale(nav)) { render(app, id); openTicket(tid); }
   };
   app.querySelectorAll("[data-ticket]").forEach((b) => (b.onclick = async () => {
@@ -260,8 +262,8 @@ function incidentDamageItem(v, m) {
   const b = [];
   if (can.logService()) b.push(`<a class="secondary" href="#/service/new/${v.id}?fixdmg=${m.id}">Log fix</a>`);
   if (atLeast("supervisor")) b.push(`<button class="secondary" data-dmgfix="${m.id}">Mark repaired</button>`);
-  return `<li><div class="spread"><div><b>${m.diagram === "trailer" ? "Trailer damage" : "Damage"} ${m.n}: ${esc(m.note || "(no description)")}</b>
-      <span class="pill warn">Incident</span>
+  return `<li><div class="spread"><div><b>${m.diagram === "trailer" ? "Trailer damage" : "Damage"}: ${esc(m.note || "(no description)")}</b>
+      <span class="pill warn">Incident</span>${ticketPills(m)}
       <div class="small">${markedLink(m)}</div></div>${b.length ? `<div class="btncol">${b.join("")}</div>` : ""}</div></li>`;
 }
 

@@ -547,7 +547,9 @@ export default async function incidentRoutes(app: FastifyInstance) {
       `SELECT dm.id, dm.diagram, dm.seq, dm.note, n.id AS incident_id, n.incident_date, n.reporter_name,
               v.id AS vehicle_id, v.truck_code, v.year, v.make, v.model,
               (current_date - n.incident_date) AS days_open,
-              ARRAY(SELECT p.id FROM photos p WHERE p.damage_mark_id = dm.id ORDER BY p.created_at, p.id) AS photo_ids
+              ARRAY(SELECT p.id FROM photos p WHERE p.damage_mark_id = dm.id ORDER BY p.created_at, p.id) AS photo_ids,
+              ARRAY(SELECT td.ticket_id FROM repair_ticket_damage td JOIN repair_tickets t ON t.id = td.ticket_id
+                     WHERE td.damage_mark_id = dm.id AND t.voided_at IS NULL ORDER BY td.ticket_id) AS ticket_ids
          FROM damage_marks dm
          JOIN live_incidents n ON n.id = dm.incident_id
          JOIN vehicles v ON v.id = n.vehicle_id

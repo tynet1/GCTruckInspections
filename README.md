@@ -45,7 +45,7 @@ when signal returns.
 | Area | Status |
 |---|---|
 | Registration expiration: supervisors update it from the form, sign-off or truck page; full history; PDFs keep the date on file | done |
-| PDF repair ticket: tick repairs on a truck, numbered ticket (RT-0001) to print/share/email, Log fix from it, void with a reason | done |
+| PDF repair ticket: tick repairs on a truck, numbered ticket (RT-0001) to print/share/email, Log fix from it, void with a reason. Incident damage can go on a ticket too, but is never ticked for you (a totaled truck mustn't go to the mechanic) | done |
 | Yard walks (after the 11/13/26 yard fire): daily at AZ by a supervisor on a fire-safety checklist with OK/Repair, notes, photos and signature; works offline; problems stay open on the yard page, the repairs board and supervisors' home screen until resolved; PDF | done |
 | Equipment checks: trailers and tagged equipment kept in Admin (moves between trailers and retirements kept); the shop or a supervisor checks a trailer at a time, each piece on its type's checklist or "Not here"; due every 30 days (changeable); works offline; problems on the equipment page, repairs board and home screen until resolved | done |
 | Maintenance log for equipment: the shop logs work on a piece (types of work, next due per type, cost, photos), closes its open problems ("Log fix"), void with a reason; "Service due" once a date passes; works offline | done |

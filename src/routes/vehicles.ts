@@ -55,6 +55,7 @@ export interface DamageMark {
   on_current_diagram: boolean; // false if the truck's picture (or trailer type) changed since, so it can't be drawn
   photos: { id: string; caption: string | null }[];
   repair: DamageRepair | null; // set while it's marked repaired (it's then off the form's grey dots)
+  ticket_ids: number[];        // live repair tickets it's on (incident damage only, 019)
 }
 
 export interface DamageRepair {
@@ -94,6 +95,12 @@ export async function damageHistory(vehicleId: number, current: { diagram_id: nu
       WHERE dm.vehicle_id = $1 AND dr.active`,
     [vehicleId],
   );
+  const tickets = await q(
+    `SELECT td.damage_mark_id, td.ticket_id FROM repair_ticket_damage td JOIN repair_tickets t ON t.id = td.ticket_id
+       JOIN live_damage_marks dm ON dm.id = td.damage_mark_id
+      WHERE dm.vehicle_id = $1 AND t.voided_at IS NULL ORDER BY td.ticket_id`,
+    [vehicleId],
+  );
   const repairPhotos = repairs.length
     ? await q(`SELECT id, caption, damage_repair_id FROM photos WHERE damage_repair_id = ANY($1::int[]) ORDER BY created_at, id`,
       [repairs.map((r) => r.id)])
@@ -107,6 +114,7 @@ export async function damageHistory(vehicleId: number, current: { diagram_id: nu
       n: ++count[m.diagram as "truck" | "trailer"],
       on_current_diagram: !drawn_on || drawn_on === now,
       photos: photos.filter((p) => p.damage_mark_id === m.id).map(({ damage_mark_id: _d, ...p }) => p),
+      ticket_ids: tickets.filter((x) => x.damage_mark_id === m.id).map((x) => x.ticket_id as number),
       repair: r
         ? {
           id: r.id, repaired_at: r.repaired_at, repaired_by_name: r.repaired_by_name, note: r.note, service_log_id: r.service_log_id,

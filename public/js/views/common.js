@@ -80,4 +80,4 @@ export function inspectionRow(i, { showTruck = true } = {}) {
     <span class="row" style="justify-content:flex-end">${inspectionPills(i)}</span></a>`;
 }
 
-export const SECTION_TITLES = { exterior: "Exterior", interior: "Interior", trailer: "Trailer & crew" };
+export const SECTION_TITLES = { exterior: "Exterior", interior: "Interior", trailer: "Trailer & crew", incident: "Incident damage" };

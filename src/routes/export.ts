@@ -191,7 +191,7 @@ export default async function exportRoutes(app: FastifyInstance) {
         (r.ticket_ids as number[]).map(ticketNumber).join("; "), num(r.photos), `${link}inspection/${r.inspection_id}`,
       ] as Cell[] })),
       ...dmg.map((r) => ({ truck: r.truck_code as string, date: String(r.incident_date), row: [
-        r.truck_code, r.vehicle, "Incident damage", `${r.diagram === "trailer" ? "Trailer damage" : "Damage"} ${r.seq}`, r.note,
+        r.truck_code, r.vehicle, "Incident damage", r.diagram === "trailer" ? "Trailer damage" : "Damage", r.note,
         r.incident_date, r.reporter_name, r.repaired_at ? "Fixed" : "Open", num(r.days_open), r.repaired_at, r.repaired_by_name,
         r.service_log_id ? null : r.repair_note, r.service_log_id ? `${link}service/${r.service_log_id}` : null,
         "", num(r.photos), `${link}incident/${r.incident_id}`,

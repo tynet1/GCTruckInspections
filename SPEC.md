@@ -477,7 +477,10 @@ POST /service-logs/:id/void         {reason}                                    
      truck, and closing its repairs still goes through a maintenance entry (Log fix), which can name the ticket. Tyler's
      answers (2026-11-17): it goes to **both** Frank's shop and outside vendors; it's a PDF that can be **printed, shared
      or emailed** from the phone's share sheet (no mail service needed); a ticket holds **one or several** repairs on one
-     truck (whatever is ticked); **no PO or work-order number** for now.
+     truck (whatever is ticked); **no PO or work-order number** for now. Since 2026-11-18 (019) a ticket can also hold
+     damage from an incident report, but **only if someone ticks it**: the picker never ticks incident damage for you
+     (Tyler: a totaled truck mustn't go to the mechanic). It's listed under the repairs as "Incident damage", named by
+     its description; the board's Ticket button on a piece of incident damage ticks just that piece.
    - **Incident reports (2026-11-12; built 2026-11-18).** Built from GC's incident forms (Tyler, 2026-11-18; copies in
      `reference/incidents/`): the Managers Incident Report, Vehicle Accident Report, Photograph Log, Employee
      Injury/Near Miss Report and Employee Refusal of Medical Treatment. Tyler's answers (2026-11-18): **leave the
@@ -491,8 +494,9 @@ POST /service-logs/:id/void         {reason}                                    
      driver, injuries yes/no, what happened and the manager's name and signature are required); damage pins go on the
      truck's damage on file and count as open repairs until marked repaired or fixed through the maintenance log
      (repairs board "Incident damage", repairs CSV); supervisors and admins see new reports on their home screen until
-     they open them; the PDF is the forms filled in, plus a damage diagram page and any notes added later. Not done
-     yet: incident damage on a repair ticket (tickets hold inspection repairs only). Original starting point: filed from the phone by whoever was there, tied to a truck (and trailer) when one was
+     they open them; the PDF is the forms filled in, plus a damage diagram page and any notes added later. Incident
+     damage can go on a repair ticket only when it's ticked (019, see the repair ticket answers above). Original
+     starting point: filed from the phone by whoever was there, tied to a truck (and trailer) when one was
      involved; date, time and location; what happened; people involved and any injuries; the other party, their vehicle and
      insurance; police report number; photos, damage pins on the truck diagram and a signature; supervisor review and a PDF.
      Same data rules as inspections (§4a): read-only once submitted, corrections in a supervisor note, archive/delete without

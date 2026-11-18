@@ -53,14 +53,19 @@ function item(r, showTruck) {
     </div>${repairButtons(r, r.vehicle_id, who)}</div></li>`;
 }
 
+/** A truck's open incident damage, as the ticket picker wants it. */
+const incDamageOf = (vehicleId) => incDmg.filter((m) => m.vehicle_id === vehicleId)
+  .map((m) => ({ id: m.id, diagram: m.diagram, seq: m.seq, note: m.note, date: m.incident_date, ticket_ids: m.ticket_ids }));
+
 /** Damage pinned on an incident report, open until it's marked repaired (018). */
 function incidentItem(m) {
   const b = [];
   if (can.logService()) b.push(`<a class="secondary" href="#/service/new/${m.vehicle_id}?fixdmg=${m.id}">Log fix</a>`);
   if (atLeast("supervisor")) b.push(`<button class="secondary" data-incfix="${m.id}">Mark repaired</button>`);
-  const name = `${m.diagram === "trailer" ? "Trailer damage" : "Damage"} ${m.seq}`;
+  b.push(`<button class="secondary" data-incticket="${m.id}">Ticket</button>`);
+  const name = m.diagram === "trailer" ? "Trailer damage" : "Damage";
   return `<li><div class="spread" style="align-items:flex-start"><div class="grow">
-      <a href="#/truck/${m.vehicle_id}"><b>${esc(m.truck_code)}</b></a> · <b>${esc(name)}${m.note ? `: ${esc(m.note)}` : ""}</b> ${age(m.days_open)}
+      <a href="#/truck/${m.vehicle_id}"><b>${esc(m.truck_code)}</b></a> · <b>${esc(name)}${m.note ? `: ${esc(m.note)}` : ""}</b> ${age(m.days_open)}${ticketPills(m)}
       <div class="small muted">${m.incident_id ? `<a href="#/incident/${esc(m.incident_id)}">From the ${fmtDate(m.incident_date)} incident</a>${
         m.reporter_name ? ` · ${esc(m.reporter_name)}` : ""}` : `From an incident on ${fmtDate(m.incident_date)}`}</div>
       ${m.photo_ids?.length ? `<div class="row" style="margin-top:4px">${m.photo_ids.map((id) =>
@@ -137,9 +142,20 @@ function draw(app) {
   app.querySelectorAll("[data-ticket-truck]").forEach((b) => (b.onclick = async () => {
     const rs = list.filter((r) => String(r.vehicle_id) === b.dataset.ticketTruck);
     const truck = { id: Number(b.dataset.ticketTruck), truck_code: rs[0]?.truck_code };
-    const tid = await makeTicket(truck, rs);
+    const tid = await makeTicket(truck, rs, { damage: incDamageOf(truck.id) });
     if (!tid || stale(nav)) return;
     try { list = await api("/repairs"); } catch { /* keep the old list */ }
+    if (!stale(nav)) draw(app);
+    openTicket(tid);
+  }));
+  // Ticket from one piece of incident damage: just that piece ticked; the truck's other repairs listed, unticked.
+  app.querySelectorAll("[data-incticket]").forEach((b) => (b.onclick = async () => {
+    const m = incDmg.find((x) => String(x.id) === b.dataset.incticket);
+    if (!m) return;
+    const truck = { id: m.vehicle_id, truck_code: m.truck_code };
+    const tid = await makeTicket(truck, list.filter((r) => r.vehicle_id === m.vehicle_id), { picked: [], damage: incDamageOf(m.vehicle_id), pickedDamage: [m.id] });
+    if (!tid || stale(nav)) return;
+    incDmg = await api("/incident-repairs").catch(() => incDmg);
     if (!stale(nav)) draw(app);
     openTicket(tid);
   }));

@@ -1,6 +1,7 @@
 // Repair tickets (SPEC §9): pick one or more open repairs on a truck and make a numbered ticket for the shop or an
 // outside vendor, as a PDF to print, share or email. Tickets are kept for good; a mistaken one is voided with a reason.
 // Fixing the repairs still goes through a maintenance entry (or a supervisor's Resolve), and the ticket shows it.
+// A ticket can also hold damage from an incident report (019), only when someone ticked it: it's never picked for them.
 import type { FastifyInstance } from "fastify";
 import { requireRole } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
@@ -12,13 +13,15 @@ export const ticketNumber = (id: number) => `RT-${String(id).padStart(4, "0")}`;
 const MAX_ITEMS = 50;
 
 export type TicketItem = {
-  id: number;
+  id: number;                  // the repair (inspection item) id, or the damage mark id when kind is "damage"
+  kind: "repair" | "damage";
   position: number;
   section: string;
   label: string;
   note: string | null;
-  inspection_id: string;
-  inspection_date: string;
+  inspection_id: string | null;
+  incident_id: string | null;
+  inspection_date: string;     // the date it was reported (inspection or incident)
   inspector_name: string;
   resolved_at: Date | null;
   resolved_by_name: string | null;
@@ -64,9 +67,9 @@ export async function loadTicket(id: number) {
     [id],
   );
   if (!t) return null;
-  const items = await q<TicketItem>(
-    `SELECT ii.id, ti.position, ii.section, ii.label_snapshot AS label, ii.note,
-            i.id AS inspection_id, i.inspection_date, i.inspector_name,
+  const repairs = await q<TicketItem>(
+    `SELECT ii.id, 'repair' AS kind, ti.position, ii.section, ii.label_snapshot AS label, ii.note,
+            i.id AS inspection_id, NULL::uuid AS incident_id, i.inspection_date, i.inspector_name,
             ii.resolved_at, ru.name AS resolved_by_name, ii.resolution_note,
             (SELECT min(slr.service_log_id) FROM service_log_repairs slr JOIN service_logs sl ON sl.id = slr.service_log_id
               WHERE slr.inspection_item_id = ii.id AND slr.active AND slr.resolved_here AND sl.voided_at IS NULL) AS service_log_id,
@@ -81,6 +84,25 @@ export async function loadTicket(id: number) {
       ORDER BY ti.position`,
     [id],
   );
+  // Incident damage on the ticket: "fixed" once it's marked repaired (or fixed through the maintenance log).
+  const damage = await q<TicketItem>(
+    `SELECT dm.id, 'damage' AS kind, td.position, 'incident' AS section,
+            (CASE WHEN dm.diagram = 'trailer' THEN 'Trailer damage' ELSE 'Damage' END) AS label, dm.note,
+            NULL::uuid AS inspection_id, n.id AS incident_id, n.incident_date AS inspection_date, n.reporter_name AS inspector_name,
+            dr.repaired_at AS resolved_at, ru.name AS resolved_by_name, dr.note AS resolution_note, dr.service_log_id,
+            COALESCE((SELECT json_agg(json_build_object('id', p.id, 'file_path', p.file_path, 'caption', p.caption)
+                                      ORDER BY p.created_at, p.id)
+                        FROM photos p WHERE p.damage_mark_id = dm.id), '[]') AS photos
+       FROM repair_ticket_damage td
+       JOIN damage_marks dm ON dm.id = td.damage_mark_id
+       JOIN incidents n ON n.id = dm.incident_id
+       LEFT JOIN damage_repairs dr ON dr.damage_mark_id = dm.id AND dr.active
+       LEFT JOIN users ru ON ru.id = dr.repaired_by
+      WHERE td.ticket_id = $1
+      ORDER BY td.position`,
+    [id],
+  );
+  const items = [...repairs, ...damage].sort((a, b) => a.position - b.position);
   return { ...t, number: ticketNumber(t.id), voided: !!t.voided_at, items };
 }
 export type Ticket = NonNullable<Awaited<ReturnType<typeof loadTicket>>>;
@@ -99,9 +121,15 @@ export default async function ticketRoutes(app: FastifyInstance) {
     const clientId = typeof b.client_id === "string" ? b.client_id.toLowerCase() : "";
     if (!UUID_RE.test(clientId)) throw bad("client_id must be a uuid.");
     const vehicleId = int(b.vehicle_id, "vehicle_id", 1);
-    if (!Array.isArray(b.item_ids) || !b.item_ids.length) throw bad("Pick at least one repair for the ticket.");
-    if (b.item_ids.length > MAX_ITEMS) throw bad(`A ticket can hold up to ${MAX_ITEMS} repairs.`);
-    const itemIds = [...new Set(b.item_ids.map((v) => int(v, "item_ids", 1)))];
+    const ids = (v: unknown, field: string) => {
+      if (v == null) return [];
+      if (!Array.isArray(v)) throw bad(`${field} must be a list.`);
+      return [...new Set(v.map((x) => int(x, field, 1)))];
+    };
+    const itemIds = ids(b.item_ids, "item_ids");
+    const damageIds = ids(b.damage_ids, "damage_ids"); // incident damage, only what was ticked
+    if (!itemIds.length && !damageIds.length) throw bad("Pick at least one repair for the ticket.");
+    if (itemIds.length + damageIds.length > MAX_ITEMS) throw bad(`A ticket can hold up to ${MAX_ITEMS} repairs.`);
     const sentTo = str(b.sent_to, "Sent to", 120);
     const note = str(b.note, "Note", 1000);
 
@@ -121,6 +149,18 @@ export default async function ticketRoutes(app: FastifyInstance) {
         throw new HttpError(422, "Some of these repairs were fixed meanwhile or aren't open on this truck. Reload and pick again.",
           { code: "bad_repairs", items: wrong });
       }
+      // Damage must be from a live incident report on this truck and not repaired yet.
+      const okDamage = new Set((await c.query(
+        `SELECT dm.id FROM damage_marks dm JOIN live_incidents n ON n.id = dm.incident_id
+          WHERE dm.id = ANY($1::int[]) AND n.vehicle_id = $2
+            AND NOT EXISTS (SELECT 1 FROM damage_repairs dr WHERE dr.damage_mark_id = dm.id AND dr.active)`,
+        [damageIds, vehicleId],
+      )).rows.map((r) => r.id as number));
+      const wrongDamage = damageIds.filter((id) => !okDamage.has(id));
+      if (wrongDamage.length) {
+        throw new HttpError(422, "Some of this damage was repaired meanwhile or isn't on this truck. Reload and pick again.",
+          { code: "bad_damage", marks: wrongDamage });
+      }
       const ins = await c.query(
         `INSERT INTO repair_tickets (client_id, vehicle_id, sent_to, note, created_by) VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (client_id) DO NOTHING RETURNING id`,
@@ -135,6 +175,10 @@ export default async function ticketRoutes(app: FastifyInstance) {
       for (const [n, itemId] of itemIds.entries()) {
         await c.query(`INSERT INTO repair_ticket_items (ticket_id, inspection_item_id, position) VALUES ($1, $2, $3)`,
           [id, itemId, n + 1]);
+      }
+      for (const [n, markId] of damageIds.entries()) {
+        await c.query(`INSERT INTO repair_ticket_damage (ticket_id, damage_mark_id, position) VALUES ($1, $2, $3)`,
+          [id, markId, itemIds.length + n + 1]);
       }
       return { id, duplicate: false };
     });
@@ -153,13 +197,18 @@ export default async function ticketRoutes(app: FastifyInstance) {
   app.get("/vehicles/:id/repair-tickets", allowed, async (req) =>
     (await q(
       `SELECT t.id, t.sent_to, t.created_at, u.name AS created_by_name, (t.voided_at IS NOT NULL) AS voided,
-              count(ti.*)::int AS items, count(ti.*) FILTER (WHERE ii.resolved_at IS NOT NULL)::int AS fixed
+              (r.n + d.n)::int AS items, (r.fixed + d.fixed)::int AS fixed
          FROM repair_tickets t
          JOIN users u ON u.id = t.created_by
-         JOIN repair_ticket_items ti ON ti.ticket_id = t.id
-         JOIN inspection_items ii ON ii.id = ti.inspection_item_id
+         CROSS JOIN LATERAL (
+           SELECT count(*) AS n, count(*) FILTER (WHERE ii.resolved_at IS NOT NULL) AS fixed
+             FROM repair_ticket_items ti JOIN inspection_items ii ON ii.id = ti.inspection_item_id
+            WHERE ti.ticket_id = t.id) r
+         CROSS JOIN LATERAL (
+           SELECT count(*) AS n,
+                  count(*) FILTER (WHERE EXISTS (SELECT 1 FROM damage_repairs dr WHERE dr.damage_mark_id = td.damage_mark_id AND dr.active)) AS fixed
+             FROM repair_ticket_damage td WHERE td.ticket_id = t.id) d
         WHERE t.vehicle_id = $1
-        GROUP BY t.id, u.name
         ORDER BY t.created_at DESC, t.id DESC LIMIT 200`,
       [idParam(req.params)],
     )).map((t) => ({ ...t, number: ticketNumber(t.id) })));
