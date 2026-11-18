@@ -27,17 +27,19 @@ export async function render(app) {
     <input class="search" id="q" type="search" placeholder="Search truck, plate, VIN…" value="${esc(query)}" autocomplete="off" aria-label="Search trucks">
     ${can.seeService() ? `<a class="secondary wide" id="rbLink" href="#/repairs" style="margin-top:12px">Repairs board</a>` : ""}
     <div id="yardBox"></div>
+    <div id="equipBox"></div>
     <div id="review"></div>
     <h2>Pick a truck</h2><div id="trucks"><div class="empty">Loading trucks…</div></div>
     ${recentBlocks()}`;
 
-  const [vehicles, recent, drafts, unreviewed, recentSvc, yards] = await Promise.all([
+  const [vehicles, recent, drafts, unreviewed, recentSvc, yards, equip] = await Promise.all([
     api("/vehicles").catch((e) => e),
     api("/inspections?limit=15").catch((e) => e),
     allDrafts().catch(() => []),
     atLeast("supervisor") ? api("/inspections?status=submitted&limit=100").catch((e) => e) : null,
     can.seeService() ? api("/service-logs?limit=10").catch((e) => e) : null,
     can.seeService() ? api("/yards").catch(() => null) : null,
+    can.seeService() ? api("/equipment").catch(() => null) : null,
   ]);
   if (stale(nav)) return;
   if (recentSvc) {
@@ -57,6 +59,14 @@ export async function render(app) {
     ].join("<br>")}</div>` : "")
       + `<div class="card list">${yards.map((y) => `<a class="item" href="#/yard/${y.id}"><span class="grow"><b>${esc(y.name)}</b>
         <span class="small muted clip">${y.last_date ? `Last walk ${fmtDate(y.last_date)}` : "No walks yet"}</span></span>${yardPills(y)}</a>`).join("")}</div>`;
+  }
+
+  // Equipment: how many pieces are due for a check, and open problems.
+  if (equip && (equip.trailers.length || equip.unassigned.length)) {
+    $("#equipBox").innerHTML = `<div class="card list" style="margin-top:12px"><a class="item" href="#/equipment"><span class="grow"><b>Equipment</b>
+        <span class="small muted clip">Checked every ${equip.check_days} days</span></span>
+      <span class="row" style="justify-content:flex-end;flex-wrap:nowrap">${equip.due ? `<span class="pill warn">${equip.due} due</span>` : `<span class="pill okk">None due</span>`}
+        ${equip.open_problems ? `<span class="pill bad">${equip.open_problems} open</span>` : ""}</span></a></div>`;
   }
 
   const rb = $("#rbLink");

@@ -4,8 +4,8 @@ Phone-first web app that replaces the paper Truck Inspection Sheet: crews sign i
 checklist on their phone, drop numbered damage pins on the truck diagram, add photos and sign with a finger.
 Supervisors sign off and export a PDF that looks like the paper form. The shop keeps a maintenance log, open repairs
 are tracked across the fleet, repair tickets go out as PDFs, supervisors walk the yard daily on a fire-safety
-checklist, and everything exports to CSV. Works with weak or no
-signal: drafts stay on the phone and upload when signal returns.
+checklist, the shop checks the equipment on each trailer, and everything exports to CSV. Works with weak or no signal:
+drafts stay on the phone and upload when signal returns.
 
 - **Spec:** [SPEC.md](SPEC.md) (source of truth, including the roadmap and Tyler's answers) · **Deploy:** [docs/DEPLOY.md](docs/DEPLOY.md)
 - **Vehicle data questions:** [seed/DATA-ISSUES.md](seed/DATA-ISSUES.md)
@@ -22,7 +22,7 @@ signal: drafts stay on the phone and upload when signal returns.
 | Offline: draft autosaves to the phone (IndexedDB); uploads retry with backoff; "Saved on phone, not yet uploaded"; duplicate-proof submit (`client_id`) | done |
 | Inspection detail: repairs first, pins, photo gallery, full checklist, supervisor sign-off, resolve repairs | done |
 | PDF export matching the paper form (page 1 sheet, page 2 trailer + signatures, photo pages) | done |
-| Admin: users and PINs, trucks (every header field, trailer type, diagram), truck and yard checklists, branding (name, color, logo), deleted inspections | done |
+| Admin: users and PINs, trucks (every header field, trailer type, diagram), trailers and equipment, truck/yard/equipment checklists, branding (name, color, logo), deleted inspections | done |
 | Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | running on the droplet; backup and restore tested |
 
 ## Phase 2
@@ -36,7 +36,7 @@ signal: drafts stay on the phone and upload when signal returns.
 | Batch PDF export: tick inspections, get one PDF each (zip, or share as separate files) | done |
 | Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve / Ticket | done |
 | CSV export: inspections, repairs, maintenance log, trucks, with truck/date filters (Download CSV in the menu) | done |
-| Checklist editor (Admin → Checklist, truck inspection or yard walk): add, reword, reorder, retire and restore items, with a change history. New inspections only; submitted ones keep their items and wording, and a form already open on a phone still sends | done |
+| Checklist editor (Admin → Checklist: truck inspection, yard walk or equipment): add, reword, reorder, retire and restore items, with a change history. New inspections only; submitted ones keep their items and wording, and a form already open on a phone still sends | done |
 | Fleet management: status (in service, in the shop, on hold, preparing for return, returned, sold), trailers that move between trucks, a reminders list for supervisors | scope answered 2026-11-17; lease details wait until Tyler has them |
 
 ## Wishlist (SPEC §9 item 5)
@@ -46,16 +46,17 @@ signal: drafts stay on the phone and upload when signal returns.
 | Registration expiration: supervisors update it from the form, sign-off or truck page; full history; PDFs keep the date on file | done |
 | PDF repair ticket: tick repairs on a truck, numbered ticket (RT-0001) to print/share/email, Log fix from it, void with a reason | done |
 | Yard walks (after the 11/13/26 yard fire): daily at AZ by a supervisor on a fire-safety checklist with OK/Repair, notes, photos and signature; works offline; problems stay open on the yard page, the repairs board and supervisors' home screen until resolved; PDF | done |
-| Equipment inspections: the ~8 tagged pieces of yard-care equipment on each trailer, periodic, with maintenance like trucks | next |
+| Equipment checks: trailers and tagged equipment kept in Admin (moves between trailers and retirements kept); the shop or a supervisor checks a trailer at a time, each piece on its type's checklist or "Not here"; due every 30 days (changeable); works offline; problems on the equipment page, repairs board and home screen until resolved | done |
+| Maintenance log for equipment (log work on a piece, next due) | next |
 | Incident reports: vehicle incidents filed by supervisors; damage goes on the truck's record | waiting on a sample form |
 
 Build order and every answered question are in SPEC §9. Phase 3 after that: full code review, performance and a burn-in test.
 
 ## Security and data safety
 
-- Nothing is hard-deleted: inspections, yard walks, maintenance entries, damage repairs, registration history, repair
-  tickets and checklist items are kept for good (retire, void or archive instead), and the database refuses deletes.
-  See SPEC §4a.
+- Nothing is hard-deleted: inspections, yard walks, equipment checks, trailers, equipment, maintenance entries, damage
+  repairs, registration history, repair tickets and checklist items are kept for good (retire, void or archive
+  instead), and the database refuses deletes. See SPEC §4a.
 - Sign-in: lockout after 5 wrong tries (longer if it keeps happening that day), 20 wrong tries an hour per network,
   real client addresses behind Caddy and Cloudflare. Photo uploads: 1 GB per person a day, and they pause before the
   disk fills. HSTS over HTTPS. Details in SPEC §3.
@@ -65,7 +66,8 @@ Build order and every answered question are in SPEC §9. Phase 3 after that: ful
 ```
 src/                 Fastify API (TypeScript, run directly by Node 24, no build step)
   routes/            auth, vehicles, photos, inspections, service (maintenance), tickets, export (CSV),
-                     checklist (editor), yard (yard walks), admin, branding
+                     checklist (editor), yard (yard walks), equipment (trailers, equipment, checks), admin, branding
+  photo-owners.ts    the one list of records a photo can belong to (used by every photo check and the clean-up)
   pdf.ts             paper-form HTML template -> PDF via headless Chromium
   ticket-pdf.ts      repair ticket PDF
   yard-pdf.ts        yard walk PDF
@@ -73,7 +75,8 @@ src/                 Fastify API (TypeScript, run directly by Node 24, no build 
   storage.ts         photo/signature storage (local disk today; S3/Azure later behind the same interface)
 public/              the web app (plain HTML/CSS/JS modules, no framework), service worker, diagrams
   js/views/          one module per screen (home, truck, form, detail, repairs, tickets, yard, csv, export, admin…)
-  js/drafts.js, svc.js, yardq.js   what's saved on the phone and the upload queues (inspections, maintenance, yard walks)
+  js/drafts.js, svc.js, yardq.js, equipq.js   what's saved on the phone and the upload queues (inspections,
+                     maintenance, yard walks, equipment checks)
 db/migrations/       numbered SQL migrations, applied automatically on start (never edit one that has shipped)
 seed/vehicles.csv    trucks added on start if missing (never overwrites edits made in Admin)
 scripts/             backup.sh (nightly, run by the backup container), restore.sh

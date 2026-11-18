@@ -1,5 +1,5 @@
 // Checklist editor (admin): add, rename, reorder, retire and restore checklist items, for the truck inspection checklist
-// (/admin/checklist) and the yard walk checklist (/admin/yard-checklist). Changes apply to new inspections; submitted
+// (/admin/checklist), the yard walk checklist (/admin/yard-checklist) and the equipment checklist (/admin/equipment-checklist). Changes apply to new inspections; submitted
 // ones keep the items and wording they had. Items are never deleted, and every change is kept.
 import type { FastifyInstance } from "fastify";
 import type { PoolClient } from "pg";
@@ -20,6 +20,20 @@ export const YARD_SECTIONS = [
   { key: "access", title: "Access & security" },
 ] as const;
 
+/** Kinds of equipment (migration 013). Each has its own part of the equipment checklist, after the "All equipment" part. */
+export const EQUIPMENT_TYPES = [
+  { key: "string_trimmer", title: "String trimmer" },
+  { key: "blower", title: "Blower" },
+  { key: "hedge_trimmer", title: "Hedge trimmer" },
+  { key: "edger", title: "Edger" },
+  { key: "chainsaw", title: "Chainsaw" },
+  { key: "pole_saw", title: "Pole saw" },
+  { key: "mower", title: "Mower" },
+  { key: "sprayer", title: "Sprayer" },
+  { key: "other", title: "Other" },
+] as const;
+export const EQUIPMENT_SECTIONS = [{ key: "all", title: "All equipment" }, ...EQUIPMENT_TYPES] as const;
+
 /** Where one checklist lives. Table names are fixed strings here, never from a request. */
 interface Checklist {
   path: string;                                  // URL prefix under /api
@@ -35,6 +49,8 @@ const CHECKLISTS: Checklist[] = [
     cast: "::checklist_section", sections: SECTIONS },
   { path: "/admin/yard-checklist", items: "yard_checklist_items", changes: "yard_checklist_changes",
     answers: "yard_inspection_items", cast: "::text", sections: YARD_SECTIONS },
+  { path: "/admin/equipment-checklist", items: "equipment_checklist_items", changes: "equipment_checklist_changes",
+    answers: "equipment_check_items", cast: "::text", sections: EQUIPMENT_SECTIONS },
 ];
 
 type ItemRow = { id: number; section: string; label: string; sort_order: number; active: boolean };

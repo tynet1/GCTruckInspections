@@ -5,7 +5,7 @@ import { brandVars, rememberBranding } from "../brand.js";
 import { errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, modal, shrinkImage, toast, vehicleInfo } from "../util.js";
 
-const TABS = { users: "Users & PINs", trucks: "Trucks", checklist: "Checklist", branding: "Branding", deleted: "Deleted inspections" };
+const TABS = { users: "Users & PINs", trucks: "Trucks", equipment: "Equipment", checklist: "Checklist", branding: "Branding", deleted: "Deleted inspections" };
 const ROLE_LABELS = {
   crew: "crew (inspections)",
   shop: "shop (maintenance log)",
@@ -22,6 +22,7 @@ export async function render(app, tab = "users", editId = null) {
     <div id="adm"><div class="empty">Loading…</div></div>`;
   try {
     if (tab === "trucks") await trucksTab(nav, editId);
+    else if (tab === "equipment") await equipmentTab(nav, editId);
     else if (tab === "checklist") await checklistTab(nav);
     else if (tab === "branding") await brandingTab(nav);
     else if (tab === "deleted") await deletedTab(nav);
@@ -38,6 +39,7 @@ const CHANGE_WORDS = { added: "Added", renamed: "Reworded", moved: "Moved", reti
 const CHECKLISTS = {
   truck: { label: "Truck inspection", api: "/admin/checklist", title: "Inspection checklist" },
   yard: { label: "Yard walk", api: "/admin/yard-checklist", title: "Yard walk checklist" },
+  equipment: { label: "Equipment", api: "/admin/equipment-checklist", title: "Equipment checklist" },
 };
 let ckKind = "truck";
 
@@ -148,6 +150,137 @@ function checklistItemEditor(item, section, sections, base) {
       }
     };
   });
+}
+
+// ---------- Equipment ----------
+
+/** Trailers and the equipment on them: add, edit, move a piece to another trailer, retire; and how often to check. */
+async function equipmentTab(nav, editId) {
+  const data = await api("/admin/equipment");
+  if (stale(nav)) return;
+  const reload = () => equipmentTab(nav, null);
+  const trailerName = new Map(data.trailers.map((t) => [t.id, t.trailer_number]));
+  const box = $("#adm");
+  const live = data.equipment.filter((e) => e.active);
+  box.innerHTML = `<div class="card" style="margin-top:14px"><label class="f" for="eqDays">Check each piece every</label>
+      <div class="row" style="flex-wrap:nowrap"><input class="t" id="eqDays" inputmode="numeric" pattern="[0-9]*" value="${data.check_days}" style="max-width:110px">
+        <span>days</span><button class="secondary" id="eqDaysSave">Save</button></div></div>
+    <div class="spread" style="margin:16px 4px 8px"><h2 style="margin:0">Trailers (${data.trailers.filter((t) => t.active).length})</h2>
+      <button class="primary" id="addTrailer">+ Add trailer</button></div>
+    <div class="card list">${data.trailers.length ? data.trailers.map((t) => `<button class="item" data-trl="${t.id}">
+      <span class="grow"><b>${esc(t.trailer_number)}</b>${t.name ? ` ${esc(t.name)}` : ""}<span class="small muted clip">${esc(t.plate || "no plate")} ·
+        ${((n) => `${n} piece${n === 1 ? "" : "s"}`)(live.filter((e) => e.trailer_id === t.id).length)}</span></span>${t.active ? "" : `<span class="pill bad">Retired</span>`}</button>`).join("")
+      : `<div class="empty">No trailers yet.</div>`}</div>
+    <div class="spread" style="margin:16px 4px 8px"><h2 style="margin:0">Equipment (${live.length})</h2>
+      <button class="primary" id="addEquip">+ Add equipment</button></div>
+    <p class="small muted" style="margin:0 4px 10px">Tap a piece to edit it, move it to another trailer or retire it. Every change is kept.</p>
+    <div class="card list">${data.equipment.length ? data.equipment.map((e) => `<button class="item" data-eq="${e.id}">
+      <span class="grow"><b>${esc(e.tag)}</b> ${esc(e.type_title)}<span class="small muted clip">${esc([e.make, e.model].filter(Boolean).join(" ") || "—")} ·
+        ${esc(e.trailer_id ? trailerName.get(e.trailer_id) || "?" : "Not on a trailer")}</span></span>${e.active ? "" : `<span class="pill bad">Retired</span>`}</button>`).join("")
+      : `<div class="empty">No equipment yet.</div>`}</div>`;
+
+  $("#eqDaysSave").onclick = async (ev) => {
+    ev.target.disabled = true;
+    try {
+      await api("/admin/equipment-settings", { method: "PUT", body: { check_days: Number($("#eqDays").value) } });
+      toast("Saved ✓");
+    } catch (e) {
+      toast(e.message, 4000);
+    }
+    ev.target.disabled = false;
+  };
+  $("#addTrailer").onclick = () => trailerEditor(null, reload);
+  $("#addEquip").onclick = () => equipmentEditor(null, data, reload);
+  box.querySelectorAll("[data-trl]").forEach((b) => (b.onclick = () => trailerEditor(data.trailers.find((t) => String(t.id) === b.dataset.trl), reload)));
+  box.querySelectorAll("[data-eq]").forEach((b) => (b.onclick = () => equipmentEditor(data.equipment.find((e) => String(e.id) === b.dataset.eq), data, reload)));
+  if (editId) {
+    const e = data.equipment.find((x) => String(x.id) === String(editId));
+    if (e) equipmentEditor(e, data, reload);
+  }
+}
+
+function trailerEditor(t, onSaved) {
+  const isNew = !t;
+  t = t || { trailer_number: "", name: "", plate: "", notes: "", active: true };
+  const m = modal(`<h3>${isNew ? "Add trailer" : `Edit ${esc(t.trailer_number)}`}</h3>
+    <div class="fields">
+      <div><label class="f" for="tr-num">Trailer number</label><input class="t" id="tr-num" maxlength="30" value="${esc(t.trailer_number)}" autocapitalize="characters" placeholder="e.g. T-03"></div>
+      <div><label class="f" for="tr-plate">Plate</label><input class="t" id="tr-plate" maxlength="20" value="${esc(t.plate || "")}" autocapitalize="characters"></div>
+    </div>
+    <label class="f" for="tr-name">Description <span class="muted">(optional)</span></label><input class="t" id="tr-name" maxlength="80" value="${esc(t.name || "")}" placeholder="e.g. 16 ft landscape trailer">
+    <label class="f" for="tr-notes">Notes <span class="muted">(optional)</span></label><textarea class="t" id="tr-notes" maxlength="1000">${esc(t.notes || "")}</textarea>
+    ${isNew ? "" : `<div class="toggle"><div><b>In use</b><div class="small muted">Retire a trailer once its equipment is moved off; its history is kept</div></div>
+      <button type="button" class="sw ${t.active ? "on" : ""}" id="tr-active" role="switch" aria-label="In use"></button></div>`}
+    <div id="tr-err"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="secondary" data-c>Cancel</button><button class="primary" data-y>Save</button></div>`);
+  const act = m.querySelector("#tr-active");
+  if (act) act.onclick = () => act.classList.toggle("on");
+  m.querySelector("[data-c]").onclick = () => m.remove();
+  m.querySelector("[data-y]").onclick = async (ev) => {
+    const body = {
+      trailer_number: m.querySelector("#tr-num").value.trim(), plate: m.querySelector("#tr-plate").value.trim() || null,
+      name: m.querySelector("#tr-name").value.trim() || null, notes: m.querySelector("#tr-notes").value.trim() || null,
+      ...(act ? { active: act.classList.contains("on") } : {}),
+    };
+    if (!body.trailer_number) return void (m.querySelector("#tr-err").innerHTML = `<div class="banner err">Type the trailer number.</div>`);
+    ev.target.disabled = true;
+    try {
+      await api(isNew ? "/admin/trailers" : `/admin/trailers/${t.id}`, { method: isNew ? "POST" : "PATCH", body });
+      m.remove();
+      toast("Saved ✓");
+      onSaved();
+    } catch (e) {
+      ev.target.disabled = false;
+      m.querySelector("#tr-err").innerHTML = `<div class="banner err">${esc(e.status === 0 ? "No signal, so nothing changed." : e.message)}</div>`;
+    }
+  };
+}
+
+function equipmentEditor(e, data, onSaved) {
+  const isNew = !e;
+  e = e || { tag: "", type: "", make: "", model: "", serial: "", trailer_id: null, notes: "", active: true };
+  const m = modal(`<h3>${isNew ? "Add equipment" : `Edit ${esc(e.tag)}`}</h3>
+    <div class="fields">
+      <div><label class="f" for="eq-tag">Tag</label><input class="t" id="eq-tag" maxlength="30" value="${esc(e.tag)}" autocapitalize="characters" placeholder="e.g. ST-07"></div>
+      <div><label class="f" for="eq-type">Kind</label><select class="t" id="eq-type"><option value="">Pick…</option>${data.types.map((t) =>
+        `<option value="${t.key}"${t.key === e.type ? " selected" : ""}>${esc(t.title)}</option>`).join("")}</select></div>
+      <div><label class="f" for="eq-make">Make</label><input class="t" id="eq-make" maxlength="60" value="${esc(e.make || "")}" placeholder="e.g. Stihl"></div>
+      <div><label class="f" for="eq-model">Model</label><input class="t" id="eq-model" maxlength="60" value="${esc(e.model || "")}" placeholder="e.g. FS 91 R"></div>
+      <div><label class="f" for="eq-serial">Serial number</label><input class="t" id="eq-serial" maxlength="60" value="${esc(e.serial || "")}"></div>
+      <div><label class="f" for="eq-trl">Trailer</label><select class="t" id="eq-trl"><option value="">Not on a trailer</option>${data.trailers.filter((t) => t.active || t.id === e.trailer_id).map((t) =>
+        `<option value="${t.id}"${t.id === e.trailer_id ? " selected" : ""}>${esc(t.trailer_number)}${t.name ? ` · ${esc(t.name)}` : ""}</option>`).join("")}</select></div>
+    </div>
+    <label class="f" for="eq-notes">Notes <span class="muted">(optional)</span></label><textarea class="t" id="eq-notes" maxlength="1000">${esc(e.notes || "")}</textarea>
+    ${isNew ? "" : `<div class="toggle"><div><b>In use</b><div class="small muted">Retired equipment drops off the trailers and checks; its history is kept</div></div>
+      <button type="button" class="sw ${e.active ? "on" : ""}" id="eq-active" role="switch" aria-label="In use"></button></div>`}
+    <div id="eq-err"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="secondary" data-c>Cancel</button><button class="primary" data-y>Save</button></div>`);
+  const act = m.querySelector("#eq-active");
+  if (act) act.onclick = () => act.classList.toggle("on");
+  m.querySelector("[data-c]").onclick = () => m.remove();
+  m.querySelector("[data-y]").onclick = async (ev) => {
+    const val = (id) => m.querySelector(id).value.trim() || null;
+    const body = {
+      tag: m.querySelector("#eq-tag").value.trim(), type: m.querySelector("#eq-type").value,
+      make: val("#eq-make"), model: val("#eq-model"), serial: val("#eq-serial"), notes: val("#eq-notes"),
+      trailer_id: m.querySelector("#eq-trl").value ? Number(m.querySelector("#eq-trl").value) : null,
+      ...(act ? { active: act.classList.contains("on") } : {}),
+    };
+    const err = (msg) => { m.querySelector("#eq-err").innerHTML = `<div class="banner err">${esc(msg)}</div>`; };
+    if (!body.tag) return err("Type the tag on the piece.");
+    if (!body.type) return err("Pick what kind of equipment it is.");
+    ev.target.disabled = true;
+    try {
+      await api(isNew ? "/admin/equipment" : `/admin/equipment/${e.id}`, { method: isNew ? "POST" : "PATCH", body });
+      m.remove();
+      toast("Saved ✓");
+      if (location.hash.includes("?edit=")) history.replaceState(null, "", "#/admin/equipment");
+      onSaved();
+    } catch (ex) {
+      ev.target.disabled = false;
+      err(ex.status === 0 ? "No signal, so nothing changed." : ex.message);
+    }
+  };
 }
 
 // ---------- Deleted inspections ----------

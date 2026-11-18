@@ -340,7 +340,7 @@ async function save() {
   if (r.state === "sent") {
     setActiveYard(null);
     d = null;
-    toast(r.res.failed ? `Yard walk saved ✓ ${r.res.failed} item${r.res.failed > 1 ? "s" : ""} to fix are on the repairs board.` : "Yard walk saved ✓", 4500);
+    toast(r.res.failed ? `Yard walk saved ✓ ${r.res.failed === 1 ? "1 item to fix is" : `${r.res.failed} items to fix are`} on the repairs board.` : "Yard walk saved ✓", 4500);
     location.hash = `#/yard-walk/${r.res.id}`;
   } else if (r.state === "waiting") {
     toast("Saved on phone, not yet uploaded. It will send by itself when signal returns.", 5000);

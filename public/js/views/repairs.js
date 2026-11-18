@@ -6,10 +6,12 @@ import { $, $$, esc, fmtDate, lightbox, vehicleInfo } from "../util.js";
 import { repairButtons, resolveRepair, SECTION_TITLES } from "./common.js";
 import { makeTicket, openTicket, ticketPills } from "./tickets.js";
 import { findingItem, wireFindings } from "./yard.js";
+import { problemItem, wireProblems } from "./equipment.js";
 
 let view = { truck: "", order: "truck" };
 let list = [];
 let findings = [];
+let equipProblems = [];
 let nav = 0;
 
 export async function render(app, truckId) {
@@ -18,7 +20,9 @@ export async function render(app, truckId) {
   setHeader({ title: "Repairs board", back: truckId ? `#/truck/${truckId}` : "#/" });
   app.innerHTML = `<div class="empty">Loading…</div>`;
   try {
-    [list, findings] = await Promise.all([api("/repairs"), api("/yard-findings").catch(() => [])]);
+    [list, findings, equipProblems] = await Promise.all([
+      api("/repairs"), api("/yard-findings").catch(() => []), api("/equipment-findings").catch(() => []),
+    ]);
   } catch (e) {
     if (!stale(nav)) app.innerHTML = errorHtml(e);
     return;
@@ -70,6 +74,10 @@ function draw(app) {
     h += `<div class="h2row"><h2>Yard findings · ${findings.length}</h2><a class="link" href="#/yard">Yard walks</a></div>
       <div class="card"><ul class="repairlist">${findings.map((f) => findingItem(f, { showYard: true })).join("")}</ul></div>`;
   }
+  if (equipProblems.length && !view.truck) {
+    h += `<div class="h2row"><h2>Equipment problems · ${equipProblems.length}</h2><a class="link" href="#/equipment">Equipment</a></div>
+      <div class="card"><ul class="repairlist">${equipProblems.map((f) => problemItem(f)).join("")}</ul></div>`;
+  }
   if (!shown.length) {
     h += `<div class="card empty">No open repairs${view.truck ? " on this truck" : ""}. ✓</div>`;
   } else if (view.order === "oldest") {
@@ -90,6 +98,10 @@ function draw(app) {
   $("#rb-truck").onchange = (e) => { view.truck = e.target.value; draw(app); };
   $$("#rb-order [data-order]").forEach((b) => (b.onclick = () => { view.order = b.dataset.order; draw(app); }));
   app.querySelectorAll("[data-lb]").forEach((img) => (img.onclick = () => lightbox(img.src, img.dataset.cap)));
+  wireProblems(app, async () => {
+    equipProblems = await api("/equipment-findings").catch(() => equipProblems);
+    if (!stale(nav)) draw(app);
+  });
   wireFindings(app, async () => {
     findings = await api("/yard-findings").catch(() => findings);
     if (!stale(nav)) draw(app);

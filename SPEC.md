@@ -137,6 +137,9 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
   changes a submitted inspection or bounces one that's being filled in.
 - Yard walks (012) are read-only once submitted and never deleted; only a finding's resolution is recorded later. Yards,
   yard checklist items and their change history can't be deleted either, and a walk's photos are protected like any other.
+- Equipment checks (013) are read-only and never deleted the same way. Trailers, equipment, their change history and
+  the equipment checklist can't be deleted. Which records a photo can belong to is one list (`src/photo-owners.ts`),
+  used by every photo check and the clean-up, so a new kind of record can't leave its photos unprotected.
 
 ## 5. Business rules
 
@@ -240,6 +243,19 @@ GET  /yard-inspections/:id           -> walk, items (with resolutions), photos  
 GET  /yard-inspections/:id/signature, /pdf (supervisor+)
 GET  /yard-findings                  -> open findings, oldest first                            supervisor, shop, admin
 POST /yard-findings/:id/resolve {note}                                                         supervisor+
+
+Equipment (built):
+GET  /admin/equipment                -> {types, check_days, trailers, equipment}                admin
+POST /admin/trailers, PATCH /admin/trailers/:id; POST /admin/equipment, PATCH /admin/equipment/:id   admin (moves = trailer_id)
+PUT  /admin/equipment-settings {check_days}                                                     admin
+/admin/equipment-checklist: the same five calls as the other checklists                         admin
+GET  /equipment                      -> trailers with pieces (last_checked, due, open_problems), unassigned   supervisor, shop, admin
+GET  /equipment/:id                  -> a piece, its history and checks                          supervisor, shop, admin
+GET  /equipment-config/:trailer|none -> {trailer, pieces, sections, checklist, as_of}            supervisor, shop, admin
+POST /equipment-checks {client_id, trailer_id, check_date, checker_name, comments, checklist_as_of, pieces, photos}
+                                     -> {id, failed} (200 + duplicate on a retry)               supervisor, shop, admin
+GET  /equipment-checks?trailer=…, /equipment-checks/:id
+GET  /equipment-findings; POST /equipment-findings/:id/resolve {note}                           supervisor, shop, admin
 
 Maintenance log (built):
 GET  /service-config                -> {categories}                          shop, supervisor, admin
@@ -370,7 +386,24 @@ POST /service-logs/:id/void         {reason}                                    
      paper form yet, so start from the checklist above; one yard for now, **AZ**; **daily**, done by a **supervisor**; a
      failed item notifies **supervisors in the app** (an in-app notification first; a push to the phone can follow, which
      needs the app added to the home screen on iPhone but no paid service).
-   - **Equipment inspections (2026-11-17).** Inspections of equipment other than trucks, each piece with its own ID, its
+   - **Equipment checks (built 2026-11-18, migration 013).** Decided by Claude where Tyler hadn't said (told to him):
+     - **Records:** Admin → Equipment keeps the trailers (number, description, plate, notes) and the equipment (tag, kind,
+       make, model, serial, trailer, notes). A piece is moved by changing its trailer; trailers and pieces are retired,
+       never deleted (a trailer only once its equipment is moved off), and every add, edit, move and retirement is kept
+       with who and when (a piece's page shows it). Tags and trailer numbers are unique (ignoring case).
+     - **Checklist:** an "All equipment" part (guards, leaks, starts, throttle/stop switch, air filter, tag) plus a part
+       per kind (string trimmer, blower, hedge trimmer, edger, chainsaw, pole saw, mower, sprayer, other), edited in
+       Admin → Checklist → Equipment with the same rules as the others. A piece is checked on "All equipment" + its kind.
+     - **Checking:** the shop or a supervisor checks a trailer at a time (Menu → Equipment checks): each piece OK / Repair
+       with a note and photos for each problem, or "Not here" (with where it is). No signature. Saved on the phone and
+       queued like the other forms. Read-only once submitted; only a problem's resolution is recorded later.
+     - **Due:** every piece every 30 days by default (Admin → Equipment changes it); "Not here" doesn't count as checked.
+       The equipment page shows each trailer's pieces with Due / OK; the home screen shows how many are due and open problems.
+     - **Problems** stay open (equipment page, repairs board "Equipment problems", the check) until the shop or a
+       supervisor resolves them with a note.
+     - **Not built yet:** maintenance entries and next-due for equipment (Tyler: yes, like trucks), a PDF or CSV of checks,
+       and hour meters.
+     Original plan: inspections of equipment other than trucks, each piece with its own ID, its
      type's checklist and hours instead of mileage where it has a meter. Needs equipment as assets (add, retire, history),
      which overlaps fleet management. Tyler's answers (2026-11-17): the **yard-care equipment carried on the trailers**,
      about **8 pieces** (string trimmers, blowers and the like); each is numbered or tagged; **periodic** inspections for
@@ -402,8 +435,8 @@ POST /service-logs/:id/void         {reason}                                    
      are told right away; damage from an incident **goes into the truck's "Damage on file" and repair items**. Still waiting
      on a sample form.
 6. **Build order (Tyler left it to Claude, 2026-11-17):** PDF repair ticket (built) → checklist editor (built) → yard
-   inspections (built) → equipment inspections, with equipment and trailers as assets → fleet management (status,
-   trailers, supervisor reminders; lease details when Tyler has them) → incident reports once a sample form arrives.
+   inspections (built) → equipment checks (built) → maintenance log for equipment → fleet management (status, trailers
+   on trucks, supervisor reminders; lease details when Tyler has them) → incident reports once a sample form arrives.
    Phase 3 (code review, burn-in) after those.
 
 ## 10. Acceptance checklist for MVP

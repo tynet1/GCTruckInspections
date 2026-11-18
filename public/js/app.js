@@ -4,10 +4,14 @@ import { allDrafts, flush, onDraftsChange, onSent } from "./drafts.js";
 import { loadBranding } from "./brand.js";
 import { allSvcDrafts, flushSvc, onSvcChange, onSvcSent } from "./svc.js";
 import { allYardDrafts, flushYard, onYardChange, onYardSent } from "./yardq.js";
+import { allEquipDrafts, flushEquip, onEquipChange, onEquipSent } from "./equipq.js";
 import { atLeast, can, homeHeader, state } from "./ui.js";
 import { $, esc, modal, toast } from "./util.js";
 import * as admin from "./views/admin.js";
 import * as detail from "./views/detail.js";
+import * as equipDetail from "./views/equip-detail.js";
+import * as equipForm from "./views/equip-form.js";
+import * as equipment from "./views/equipment.js";
 import * as csvView from "./views/csv.js";
 import * as exportView from "./views/export.js";
 import * as form from "./views/form.js";
@@ -34,7 +38,10 @@ const routes = [
   { re: /^#\/yard(?:\/(\d+))?$/, view: yard, allow: () => can.seeService() },
   { re: /^#\/yard\/(\d+)\/walk$/, view: yardForm, role: "supervisor" },
   { re: /^#\/yard-walk\/([0-9a-f-]{36})$/i, view: yardDetail, allow: () => can.seeService() },
-  { re: /^#\/admin(?:\/(users|trucks|checklist|branding|deleted))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
+  { re: /^#\/equipment(?:\/piece\/(\d+))?$/, view: equipment, allow: () => can.seeService() },
+  { re: /^#\/equipment\/check\/(\d+|none)$/, view: equipForm, allow: () => can.seeService() },
+  { re: /^#\/equipment-check\/([0-9a-f-]{36})$/i, view: equipDetail, allow: () => can.seeService() },
+  { re: /^#\/admin(?:\/(users|trucks|equipment|checklist|branding|deleted))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
 
 let current = null;
@@ -75,19 +82,21 @@ function onSignedIn(user) {
   flush();
   flushSvc();
   flushYard();
+  flushEquip();
   route();
 }
 
 /** Inspections, maintenance entries and yard walks saved on this phone but not yet uploaded. */
 async function queuedCounts() {
-  const [a, b, c] = await Promise.all([allDrafts().catch(() => []), allSvcDrafts().catch(() => []), allYardDrafts().catch(() => [])]);
+  const [a, b, c, e] = await Promise.all([allDrafts().catch(() => []), allSvcDrafts().catch(() => []), allYardDrafts().catch(() => []),
+    allEquipDrafts().catch(() => [])]);
   const queued = (list) => list.filter((d) => d.status === "queued").length;
-  return { inspections: queued(a), service: queued(b), yard: queued(c) };
+  return { inspections: queued(a), service: queued(b), yard: queued(c), equipment: queued(e) };
 }
 
 export async function signOut() {
   const q = await queuedCounts();
-  if (q.inspections || q.service || q.yard) {
+  if (q.inspections || q.service || q.yard || q.equipment) {
     toast("Wait until your saved work finishes uploading before signing out.", 4000);
     return;
   }
@@ -105,9 +114,10 @@ export function openMenu() {
     <div style="display:grid;gap:10px">
       ${can.seeService() ? `<a class="secondary" href="#/repairs" data-close>Repairs board</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/yard" data-close>Yard walks</a>` : ""}
+      ${can.seeService() ? `<a class="secondary" href="#/equipment" data-close>Equipment checks</a>` : ""}
       ${atLeast("supervisor") ? `<a class="secondary" href="#/export" data-close>Export PDFs</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/csv" data-close>Download CSV (spreadsheet)</a>` : ""}
-      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks, checklist, branding &amp; deleted</a>` : ""}
+      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks, equipment, checklists, branding &amp; deleted</a>` : ""}
       <button class="secondary danger" id="mSignOut">Sign out</button>
       <button class="secondary" data-close>Close</button>
     </div>`);
@@ -118,16 +128,17 @@ export function openMenu() {
 async function updateNetbar() {
   const bar = $("#netbar");
   const q = await queuedCounts();
-  if ((q.inspections || q.service || q.yard) && state.user) {
+  if ((q.inspections || q.service || q.yard || q.equipment) && state.user) {
     const parts = [];
     if (q.inspections) parts.push(q.inspections === 1 ? "1 inspection" : `${q.inspections} inspections`);
     if (q.service) parts.push(q.service === 1 ? "1 maintenance entry" : `${q.service} maintenance entries`);
     if (q.yard) parts.push(q.yard === 1 ? "1 yard walk" : `${q.yard} yard walks`);
+    if (q.equipment) parts.push(q.equipment === 1 ? "1 equipment check" : `${q.equipment} equipment checks`);
     bar.innerHTML = `<div class="in"><span>${parts.join(" and ")} saved on phone, not yet uploaded</span><button id="retryNow">Retry now</button></div>`;
     bar.hidden = false;
     $("#retryNow").onclick = async () => {
       $("#retryNow").innerHTML = `<span class="spinner"></span>`;
-      await Promise.all([flush(), flushSvc(), flushYard()]);
+      await Promise.all([flush(), flushSvc(), flushYard(), flushEquip()]);
       updateNetbar();
     };
   } else if (!navigator.onLine) {
@@ -168,6 +179,7 @@ async function boot() {
   onDraftsChange(updateNetbar);
   onSvcChange(updateNetbar);
   onYardChange(updateNetbar);
+  onEquipChange(updateNetbar);
   onSent((d, res) => {
     if (!res.duplicate) toast(`${d.truckCode} inspection uploaded ✓`);
     // Lists drawn before the upload finished are now out of date.
@@ -183,13 +195,17 @@ async function boot() {
     if (!res.duplicate) toast(`${d.yardName} walk uploaded ✓`);
     if (current === home || current === yard) route();
   });
+  onEquipSent((d, res) => {
+    if (!res.duplicate) toast(`${d.title} equipment check uploaded ✓`);
+    if (current === home || current === equipment) route();
+  });
   window.addEventListener("online", updateNetbar);
   window.addEventListener("offline", updateNetbar);
   window.addEventListener("hashchange", route);
 
   await route();
   updateNetbar();
-  if (state.user) { flush(); flushSvc(); flushYard(); }
+  if (state.user) { flush(); flushSvc(); flushYard(); flushEquip(); }
 }
 
 boot();
