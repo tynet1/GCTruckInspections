@@ -7,6 +7,7 @@ import { $, daysAgo, esc, fmtDate, vehicleInfo } from "../util.js";
 import { inspectionRow, serviceRow } from "./common.js";
 import { yardPills } from "./yard.js";
 import { statusPill } from "./fleet.js";
+import { unreadBanner } from "./incidents.js";
 
 let query = "";
 
@@ -27,6 +28,7 @@ export async function render(app) {
   app.innerHTML = `
     <input class="search" id="q" type="search" placeholder="Search truck, plate, VIN…" value="${esc(query)}" autocomplete="off" aria-label="Search trucks">
     ${can.seeService() ? `<a class="secondary wide" id="rbLink" href="#/repairs" style="margin-top:12px">Repairs board</a>` : ""}
+    <div id="incBox"></div>
     <div id="remBox"></div>
     <div id="yardBox"></div>
     <div id="equipBox"></div>
@@ -34,7 +36,7 @@ export async function render(app) {
     <h2>Pick a truck</h2><div id="trucks"><div class="empty">Loading trucks…</div></div>
     ${recentBlocks()}`;
 
-  const [vehicles, recent, drafts, unreviewed, recentSvc, yards, equip, reminders] = await Promise.all([
+  const [vehicles, recent, drafts, unreviewed, recentSvc, yards, equip, reminders, newIncidents] = await Promise.all([
     api("/vehicles").catch((e) => e),
     api("/inspections?limit=15").catch((e) => e),
     allDrafts().catch(() => []),
@@ -43,6 +45,7 @@ export async function render(app) {
     can.seeService() ? api("/yards").catch(() => null) : null,
     can.seeService() ? api("/equipment").catch(() => null) : null,
     can.seeService() ? api("/reminders").catch(() => null) : null,
+    atLeast("supervisor") ? api("/incidents/unread").catch(() => null) : null,
   ]);
   if (stale(nav)) return;
   if (recentSvc) {
@@ -50,6 +53,9 @@ export async function render(app) {
       ? errorHtml(recentSvc)
       : recentSvc.length ? recentSvc.map((s) => serviceRow(s, { showTruck: true })).join("") : `<div class="empty">No maintenance logged yet.</div>`;
   }
+
+  // New incident reports this supervisor hasn't opened: told right away (SPEC §9).
+  if (newIncidents?.length) $("#incBox").innerHTML = unreadBanner(newIncidents);
 
   if (reminders) {
     $("#remBox").innerHTML = `<div class="card list" style="margin-top:12px"><a class="item" href="#/reminders"><span class="grow"><b>Reminders</b>

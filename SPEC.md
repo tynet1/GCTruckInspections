@@ -19,7 +19,7 @@ The app moves the same sheet onto a phone and adds damage pins, photos, signatur
 | Role | Who | Can |
 |---|---|---|
 | crew | Crew leads and drivers | Sign in with name + PIN, start or resume an inspection, upload photos, submit |
-| supervisor | Crew supervisors, fleet/shop | Everything crew can do, plus review and sign off inspections, mark repairs resolved, export PDFs |
+| supervisor | Crew supervisors, fleet/shop | Everything crew can do, plus review and sign off inspections, mark repairs resolved, export PDFs, file and read incident reports |
 | shop | Shop manager | Everything crew can do, plus log, edit and void maintenance entries, and close repair items; can't sign off inspections or export PDFs |
 | admin | Tyler, COO | Everything, plus manage trucks, trailers, diagrams, checklist items, users and branding |
 
@@ -153,6 +153,11 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
   phones), and one cleaned up mid-save is simply uploaded again. The phone's offline cache keeps the newest 400 items,
   so it can't grow until the browser clears the app's storage. A 60-minute burn-in (30 phones, bad signal, app crashes,
   database restarts) checks that nothing is lost, duplicated or incomplete: `scripts/burnin.ts`.
+- Incident reports (018) follow the inspection rules: idempotent submit on `client_id`, read-only once filed (the
+  database refuses changes and deletes to the report, its damage marks, notes and who-has-read-it rows), corrections
+  and later facts are notes added with who and when, and archive/delete only changes a state row with history (delete
+  is admin-only with a reason; restore from Admin → Deleted). Their photos are attached like any other record's
+  (PHOTO_OWNERS) and the week-old clean-up never touches them. The burn-in files incident reports too.
 
 ## 5. Business rules
 
@@ -473,19 +478,30 @@ POST /service-logs/:id/void         {reason}                                    
      answers (2026-11-17): it goes to **both** Frank's shop and outside vendors; it's a PDF that can be **printed, shared
      or emailed** from the phone's share sheet (no mail service needed); a ticket holds **one or several** repairs on one
      truck (whatever is ticked); **no PO or work-order number** for now.
-   - **Incident reports (2026-11-12).** No form to model it on yet; design it once Tyler has one (an insurance carrier's or HR's form, or
-     a sample of what's filled out today), so the PDF can match it the way the inspection PDF matches the paper sheet.
-     Starting point to confirm then: filed from the phone by whoever was there, tied to a truck (and trailer) when one was
+   - **Incident reports (2026-11-12; built 2026-11-18).** Built from GC's incident forms (Tyler, 2026-11-18; copies in
+     `reference/incidents/`): the Managers Incident Report, Vehicle Accident Report, Photograph Log, Employee
+     Injury/Near Miss Report and Employee Refusal of Medical Treatment. Tyler's answers (2026-11-18): **leave the
+     driver's home address, birth date and license number blank** (printed blank; not kept in the app) and there's **no
+     employee ID** yet; the **Enterprise Unit ID** prints blank until Tyler has access to Enterprise's list; the app
+     **doesn't collect** the injury forms but **generates them** in the PDF when our employee was hurt (the refusal form
+     only if they weren't taken for a medical evaluation), filled in as far as the report knows; the **map** is a
+     screenshot the supervisor adds plus the phone's location printed as a Google Maps link (no paid map service); HR's
+     **claim numbers** and the photo log's **Task ID** print blank; **supervisors and admins** only. What was built:
+     a supervisor files a report from the truck page (form in the Vehicle Accident Report's order; only the date,
+     driver, injuries yes/no, what happened and the manager's name and signature are required); damage pins go on the
+     truck's damage on file and count as open repairs until marked repaired or fixed through the maintenance log
+     (repairs board "Incident damage", repairs CSV); supervisors and admins see new reports on their home screen until
+     they open them; the PDF is the forms filled in, plus a damage diagram page and any notes added later. Not done
+     yet: incident damage on a repair ticket (tickets hold inspection repairs only). Original starting point: filed from the phone by whoever was there, tied to a truck (and trailer) when one was
      involved; date, time and location; what happened; people involved and any injuries; the other party, their vehicle and
      insurance; police report number; photos, damage pins on the truck diagram and a signature; supervisor review and a PDF.
      Same data rules as inspections (§4a): read-only once submitted, corrections in a supervisor note, archive/delete without
      erasing. Tyler's answers (2026-11-17): **vehicle incidents only** for now; **supervisors** file them and **supervisors**
-     are told right away; damage from an incident **goes into the truck's "Damage on file" and repair items**. Still waiting
-     on a sample form.
+     are told right away; damage from an incident **goes into the truck's "Damage on file" and repair items**.
 6. **Build order (Tyler left it to Claude, 2026-11-17):** PDF repair ticket (built) → checklist editor (built) → yard
    inspections (built) → equipment checks (built) → maintenance log for equipment (built) → fleet management (status,
-   trailers on trucks, supervisor reminders: built; lease details when Tyler has them) → incident reports once a sample
-   form arrives.
+   trailers on trucks, supervisor reminders: built; lease details when Tyler has them) → incident reports (built
+   2026-11-18).
    Phase 3 (code review, performance, burn-in, data-loss review): done 2026-11-18, see docs/PHASE3-REVIEW.md.
 
 ## 10. Acceptance checklist for MVP

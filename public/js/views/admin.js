@@ -5,7 +5,7 @@ import { brandVars, rememberBranding } from "../brand.js";
 import { errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, modal, shrinkImage, toast, vehicleInfo } from "../util.js";
 
-const TABS = { users: "Users & PINs", trucks: "Trucks", equipment: "Equipment", checklist: "Checklist", branding: "Branding", deleted: "Deleted inspections" };
+const TABS = { users: "Users & PINs", trucks: "Trucks", equipment: "Equipment", checklist: "Checklist", branding: "Branding", deleted: "Deleted inspections and reports" };
 const ROLE_LABELS = {
   crew: "crew (inspections)",
   shop: "shop (maintenance log)",
@@ -285,11 +285,17 @@ function equipmentEditor(e, data, onSaved) {
 
 // ---------- Deleted inspections ----------
 
-/** Deleted inspections are never erased; this is where they're found and restored. */
+/** Deleted inspections and incident reports are never erased; this is where they're found and restored. */
 async function deletedTab(nav) {
-  const list = await api("/admin/deleted-inspections");
+  const [list, incidents] = await Promise.all([api("/admin/deleted-inspections"), api("/admin/deleted-incidents").catch(() => [])]);
   if (stale(nav)) return;
-  $("#adm").innerHTML = `<h2>Deleted inspections (${list.length})</h2>
+  $("#adm").innerHTML = `${incidents.length ? `<h2>Deleted incident reports (${incidents.length})</h2>
+    <div class="card list">${incidents.map((n) => `<div class="item" style="align-items:flex-start">
+      <span class="grow"><a href="#/incident/${esc(n.id)}" style="display:inline-flex;align-items:center;min-height:44px"><b>${esc(n.truck_code)}</b>&nbsp;· ${fmtDate(n.incident_date)}</a>
+        <span class="small muted" style="display:block">Filed by ${esc(n.reporter_name || "")} · deleted ${fmtDate(n.deleted_at)} by ${esc(n.deleted_by_name)}</span>
+        <span class="small" style="display:block">${esc(n.reason || "")}</span></span>
+      <button class="secondary" data-restore-inc="${esc(n.id)}">Restore</button></div>`).join("")}</div>` : ""}
+    <h2>Deleted inspections (${list.length})</h2>
     <div class="card list">${list.length ? list.map((i) => `<div class="item" style="align-items:flex-start">
       <span class="grow"><a href="#/inspection/${esc(i.id)}" style="display:inline-flex;align-items:center;min-height:44px"><b>${esc(i.truck_code)}</b>&nbsp;· ${fmtDate(i.inspection_date)}</a>
         <span class="small muted" style="display:block">${esc(i.inspector_name || "")} · deleted ${fmtDate(i.deleted_at)} by ${esc(i.deleted_by_name)}</span>
@@ -297,6 +303,18 @@ async function deletedTab(nav) {
       <button class="secondary" data-restore="${esc(i.id)}">Restore</button></div>`).join("")
       : `<div class="empty">Nothing deleted.</div>`}</div>
     <p class="small muted">Deleting an inspection never erases it. Restoring puts it back in the lists, with its repairs and damage back on the truck.</p>`;
+  $("#adm").querySelectorAll("[data-restore-inc]").forEach((b) => (b.onclick = async () => {
+    const n = incidents.find((x) => x.id === b.dataset.restoreInc);
+    if (!(await confirmBox(`Restore the ${n.truck_code} incident report from ${fmtDate(n.incident_date)}? It goes back in the lists, with its damage back on the truck.`, "Restore"))) return;
+    b.disabled = true;
+    try {
+      await api(`/incidents/${n.id}/restore`, { method: "POST", body: {} });
+      toast("Restored ✓");
+    } catch (e) {
+      toast(e.message, 4000);
+    }
+    if (!stale(nav)) deletedTab(nav);
+  }));
   $("#adm").querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => {
     const i = list.find((x) => x.id === b.dataset.restore);
     if (!(await confirmBox(`Restore the ${i.truck_code} inspection from ${fmtDate(i.inspection_date)}? It goes back in the lists, with its repairs and damage back on the truck.`, "Restore"))) return;

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { requireUser } from "../auth.ts";
+import { atLeast, requireUser } from "../auth.ts";
 import { config } from "../config.ts";
 import { one, q } from "../db.ts";
 import { bad, HttpError, notFound, UUID_RE, uuidParam } from "../http.ts";
@@ -68,9 +68,12 @@ export default async function photoRoutes(app: FastifyInstance) {
   }
 
   app.get("/photos/:id", async (req, reply) => {
-    requireUser(req);
-    const p = await one(`SELECT file_path, content_type FROM photos WHERE id = $1`, [uuidParam(req.params)]);
+    const u = requireUser(req);
+    const p = await one(`SELECT file_path, content_type, incident_id, damage_mark_id FROM photos WHERE id = $1`, [uuidParam(req.params)]);
     if (!p) throw notFound("Photo not found.");
+    // An incident's photos can show the other party's license or insurance card: supervisors and admins only. Its
+    // damage photos are of our truck and show with the truck's damage on file, like any other.
+    if (p.incident_id && !p.damage_mark_id && !atLeast(u, "supervisor")) throw notFound("Photo not found.");
     return reply
       .type(p.content_type)
       .header("cache-control", "private, max-age=31536000, immutable")

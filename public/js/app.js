@@ -6,6 +6,7 @@ import { allSvcDrafts, flushSvc, onSvcChange, onSvcSent } from "./svc.js";
 import { allYardDrafts, flushYard, onYardChange, onYardSent } from "./yardq.js";
 import { allEquipDrafts, flushEquip, onEquipChange, onEquipSent } from "./equipq.js";
 import { allEsvcDrafts, flushEsvc, onEsvcChange, onEsvcSent } from "./esvcq.js";
+import { allIncDrafts, flushInc, onIncChange, onIncSent } from "./incq.js";
 import { atLeast, can, homeHeader, state } from "./ui.js";
 import { $, esc, modal, toast } from "./util.js";
 import * as admin from "./views/admin.js";
@@ -18,6 +19,9 @@ import * as equipment from "./views/equipment.js";
 import * as csvView from "./views/csv.js";
 import * as exportView from "./views/export.js";
 import * as form from "./views/form.js";
+import * as incident from "./views/incident.js";
+import * as incidentForm from "./views/incident-form.js";
+import * as incidents from "./views/incidents.js";
 import * as repairsBoard from "./views/repairs.js";
 import * as reminders from "./views/reminders.js";
 import * as home from "./views/home.js";
@@ -48,6 +52,9 @@ const routes = [
   { re: /^#\/equipment-check\/([0-9a-f-]{36})$/i, view: equipDetail, allow: () => can.seeService() },
   { re: /^#\/equipment\/service\/new\/(\d+)(?:\?fix=(\d+))?$/, view: equipServiceForm, allow: () => can.logService() },
   { re: /^#\/equipment-service\/(\d+)$/, view: equipService, allow: () => can.seeService() },
+  { re: /^#\/incidents$/, view: incidents, role: "supervisor" },
+  { re: /^#\/incident\/new\/(\d+)$/, view: incidentForm, role: "supervisor" },
+  { re: /^#\/incident\/([0-9a-f-]{36})$/i, view: incident, role: "supervisor" },
   { re: /^#\/admin(?:\/(users|trucks|equipment|checklist|branding|deleted))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
 
@@ -91,20 +98,21 @@ function onSignedIn(user) {
   flushYard();
   flushEquip();
   flushEsvc();
+  flushInc();
   route();
 }
 
-/** Inspections, maintenance entries and yard walks saved on this phone but not yet uploaded. */
+/** Inspections, maintenance entries, yard walks, checks and incident reports saved on this phone but not yet uploaded. */
 async function queuedCounts() {
-  const [a, b, c, e, f] = await Promise.all([allDrafts().catch(() => []), allSvcDrafts().catch(() => []), allYardDrafts().catch(() => []),
-    allEquipDrafts().catch(() => []), allEsvcDrafts().catch(() => [])]);
+  const [a, b, c, e, f, g] = await Promise.all([allDrafts().catch(() => []), allSvcDrafts().catch(() => []), allYardDrafts().catch(() => []),
+    allEquipDrafts().catch(() => []), allEsvcDrafts().catch(() => []), allIncDrafts().catch(() => [])]);
   const queued = (list) => list.filter((d) => d.status === "queued").length;
-  return { inspections: queued(a), service: queued(b) + queued(f), yard: queued(c), equipment: queued(e) };
+  return { inspections: queued(a), service: queued(b) + queued(f), yard: queued(c), equipment: queued(e), incidents: queued(g) };
 }
 
 export async function signOut() {
   const q = await queuedCounts();
-  if (q.inspections || q.service || q.yard || q.equipment) {
+  if (q.inspections || q.service || q.yard || q.equipment || q.incidents) {
     toast("Wait until your saved work finishes uploading before signing out.", 4000);
     return;
   }
@@ -122,6 +130,7 @@ export function openMenu() {
     <div style="display:grid;gap:10px">
       ${can.seeService() ? `<a class="secondary" href="#/reminders" data-close>Reminders</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/repairs" data-close>Repairs board</a>` : ""}
+      ${atLeast("supervisor") ? `<a class="secondary" href="#/incidents" data-close>Incident reports</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/yard" data-close>Yard walks</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/equipment" data-close>Equipment checks</a>` : ""}
       ${atLeast("supervisor") ? `<a class="secondary" href="#/export" data-close>Export PDFs</a>` : ""}
@@ -137,17 +146,18 @@ export function openMenu() {
 async function updateNetbar() {
   const bar = $("#netbar");
   const q = await queuedCounts();
-  if ((q.inspections || q.service || q.yard || q.equipment) && state.user) {
+  if ((q.inspections || q.service || q.yard || q.equipment || q.incidents) && state.user) {
     const parts = [];
     if (q.inspections) parts.push(q.inspections === 1 ? "1 inspection" : `${q.inspections} inspections`);
     if (q.service) parts.push(q.service === 1 ? "1 maintenance entry" : `${q.service} maintenance entries`);
     if (q.yard) parts.push(q.yard === 1 ? "1 yard walk" : `${q.yard} yard walks`);
     if (q.equipment) parts.push(q.equipment === 1 ? "1 equipment check" : `${q.equipment} equipment checks`);
+    if (q.incidents) parts.push(q.incidents === 1 ? "1 incident report" : `${q.incidents} incident reports`);
     bar.innerHTML = `<div class="in"><span>${parts.join(" and ")} saved on phone, not yet uploaded</span><button id="retryNow">Retry now</button></div>`;
     bar.hidden = false;
     $("#retryNow").onclick = async () => {
       $("#retryNow").innerHTML = `<span class="spinner"></span>`;
-      await Promise.all([flush(), flushSvc(), flushYard(), flushEquip(), flushEsvc()]);
+      await Promise.all([flush(), flushSvc(), flushYard(), flushEquip(), flushEsvc(), flushInc()]);
       updateNetbar();
     };
   } else if (!navigator.onLine) {
@@ -190,6 +200,7 @@ async function boot() {
   onYardChange(updateNetbar);
   onEquipChange(updateNetbar);
   onEsvcChange(updateNetbar);
+  onIncChange(updateNetbar);
   onSent((d, res) => {
     if (!res.duplicate) toast(`${d.truckCode} inspection uploaded ✓`);
     // Lists drawn before the upload finished are now out of date.
@@ -212,13 +223,17 @@ async function boot() {
   onEsvcSent((d, res) => {
     if (!res.duplicate) toast(`${d.tag} maintenance uploaded ✓`);
   });
+  onIncSent((d, res) => {
+    if (!res.duplicate) toast(`${d.truckCode} incident report uploaded ✓`);
+    if (current === home || current === truck || current === incidents) route();
+  });
   window.addEventListener("online", updateNetbar);
   window.addEventListener("offline", updateNetbar);
   window.addEventListener("hashchange", route);
 
   await route();
   updateNetbar();
-  if (state.user) { flush(); flushSvc(); flushYard(); flushEquip(); flushEsvc(); }
+  if (state.user) { flush(); flushSvc(); flushYard(); flushEquip(); flushEsvc(); flushInc(); }
 }
 
 boot();

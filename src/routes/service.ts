@@ -252,10 +252,13 @@ async function attachDamage(c: PoolClient, entryId: number, vehicleId: number, m
   if (!todo.length) return mine;
 
   const rows = (await c.query(
-    `SELECT dm.id, i.vehicle_id,
-            EXISTS (SELECT 1 FROM inspection_states s WHERE s.inspection_id = i.id AND s.state <> 'active') AS hidden,
+    `SELECT dm.id, coalesce(i.vehicle_id, n.vehicle_id) AS vehicle_id,
+            EXISTS (SELECT 1 FROM inspection_states s WHERE s.inspection_id = dm.inspection_id AND s.state <> 'active')
+            OR EXISTS (SELECT 1 FROM incident_states s WHERE s.incident_id = dm.incident_id AND s.state <> 'active') AS hidden,
             EXISTS (SELECT 1 FROM damage_repairs r WHERE r.damage_mark_id = dm.id AND r.active) AS repaired
-       FROM damage_marks dm JOIN inspections i ON i.id = dm.inspection_id
+       FROM damage_marks dm
+       LEFT JOIN inspections i ON i.id = dm.inspection_id
+       LEFT JOIN incidents n ON n.id = dm.incident_id
       WHERE dm.id = ANY($1::int[])
       FOR UPDATE OF dm`,
     [todo],
@@ -313,12 +316,13 @@ export async function loadEntry(id: number) {
   const photos = await q(`SELECT id, caption, damage_repair_id FROM photos WHERE service_log_id = $1 ORDER BY created_at, id`, [id]);
   const damageFixes = (await q(
     `SELECT dr.id, dr.damage_mark_id, dr.active, dr.repaired_at, dr.end_reason, dm.note, dm.diagram,
-            i.id AS inspection_id, i.inspection_date
+            dm.inspection_id, dm.incident_id, coalesce(i.inspection_date, n.incident_date) AS inspection_date
        FROM damage_repairs dr
        JOIN damage_marks dm ON dm.id = dr.damage_mark_id
-       JOIN inspections i ON i.id = dm.inspection_id
+       LEFT JOIN inspections i ON i.id = dm.inspection_id
+       LEFT JOIN incidents n ON n.id = dm.incident_id
       WHERE dr.service_log_id = $1
-      ORDER BY i.inspection_date, dm.seq`,
+      ORDER BY coalesce(i.inspection_date, n.incident_date), dm.seq`,
     [id],
   )).map((r) => ({ ...r, photos: photos.filter((p) => p.damage_repair_id === r.id).map(({ damage_repair_id: _d, ...p }) => p) }));
   const hist = await q(

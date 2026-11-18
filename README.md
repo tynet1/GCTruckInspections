@@ -4,8 +4,9 @@ Phone-first web app that replaces the paper Truck Inspection Sheet: crews sign i
 checklist on their phone, drop numbered damage pins on the truck diagram, add photos and sign with a finger.
 Supervisors sign off and export a PDF that looks like the paper form. The shop keeps a maintenance log, open repairs
 are tracked across the fleet, repair tickets go out as PDFs, supervisors walk the yard daily on a fire-safety
-checklist, the shop checks the equipment on each trailer, and everything exports to CSV. Works with weak or no signal:
-drafts stay on the phone and upload when signal returns.
+checklist, the shop checks the equipment on each trailer, supervisors file vehicle incident reports that print as GC's
+paper incident forms, and everything exports to CSV. Works with weak or no signal: drafts stay on the phone and upload
+when signal returns.
 
 - **Spec:** [SPEC.md](SPEC.md) (source of truth, including the roadmap and Tyler's answers) · **Deploy:** [docs/DEPLOY.md](docs/DEPLOY.md)
 - **Vehicle data questions:** [seed/DATA-ISSUES.md](seed/DATA-ISSUES.md)
@@ -48,7 +49,7 @@ drafts stay on the phone and upload when signal returns.
 | Yard walks (after the 11/13/26 yard fire): daily at AZ by a supervisor on a fire-safety checklist with OK/Repair, notes, photos and signature; works offline; problems stay open on the yard page, the repairs board and supervisors' home screen until resolved; PDF | done |
 | Equipment checks: trailers and tagged equipment kept in Admin (moves between trailers and retirements kept); the shop or a supervisor checks a trailer at a time, each piece on its type's checklist or "Not here"; due every 30 days (changeable); works offline; problems on the equipment page, repairs board and home screen until resolved | done |
 | Maintenance log for equipment: the shop logs work on a piece (types of work, next due per type, cost, photos), closes its open problems ("Log fix"), void with a reason; "Service due" once a date passes; works offline | done |
-| Incident reports: vehicle incidents filed by supervisors; damage goes on the truck's record | waiting on a sample form |
+| Incident reports (2026-11-18): a supervisor files one from the truck page, in the order of GC's Vehicle Accident Report (when, where with an optional GPS location, driver, police, injuries, damage pinned on the truck, other parties, witnesses, what happened, a finger drawing of the scene and a map screenshot, photos, manager comments, driver and manager signatures); works offline. The PDF is GC's forms filled in: Managers Incident Report, Vehicle Accident Report, damage diagram and Photograph Log, plus the Employee Injury/Near Miss Report and Refusal of Medical Treatment to finish by hand when our employee was hurt. Damage goes on the truck's damage on file and its open repairs (repairs board, repairs CSV) until it's marked repaired or fixed through the maintenance log. Supervisors and admins see new reports on their home screen until they open them; only they can see reports and the other party's photos. Read-only once filed: corrections are notes; archive/delete like inspections | done |
 
 Build order and every answered question are in SPEC §9.
 
@@ -60,9 +61,11 @@ fixes: [docs/PHASE3-REVIEW.md](docs/PHASE3-REVIEW.md).
 
 ## Security and data safety
 
-- Nothing is hard-deleted: inspections, yard walks, equipment checks, trailers, equipment, maintenance entries, damage
-  repairs, registration history, repair tickets and checklist items are kept for good (retire, void or archive
-  instead), and the database refuses deletes. See SPEC §4a.
+- Nothing is hard-deleted: inspections, incident reports, yard walks, equipment checks, trailers, equipment,
+  maintenance entries, damage repairs, registration history, repair tickets and checklist items are kept for good
+  (retire, void or archive instead), and the database refuses deletes. See SPEC §4a.
+- Incident reports hold the other party's details, so only supervisors and admins can open them and their photos.
+  The driver's home address, birth date, license number and employee ID aren't collected (they print blank).
 - Sign-in: lockout after 5 wrong tries (longer if it keeps happening that day), 20 wrong tries an hour per network,
   real client addresses behind Caddy and Cloudflare. Photo uploads: 1 GB per person a day, and they pause before the
   disk fills. HSTS over HTTPS. Details in SPEC §3.
@@ -75,22 +78,25 @@ fixes: [docs/PHASE3-REVIEW.md](docs/PHASE3-REVIEW.md).
 src/                 Fastify API (TypeScript, run directly by Node 24, no build step)
   routes/            auth, vehicles, photos, inspections, service (maintenance), tickets, export (CSV),
                      checklist (editor), yard (yard walks), equipment (trailers, equipment, checks),
-                     equipment-service (equipment maintenance), fleet (status, trailers, reminders), admin, branding
+                     equipment-service (equipment maintenance), fleet (status, trailers, reminders),
+                     incidents (incident reports), admin, branding
   photo-owners.ts    the one list of records a photo can belong to (used by every photo check and the clean-up)
   pdf.ts             paper-form HTML template -> PDF via headless Chromium
   ticket-pdf.ts      repair ticket PDF
   yard-pdf.ts        yard walk PDF
+  incident-pdf.ts    incident report packet (GC's incident forms, filled in)
   csv.ts             CSV files for Excel (formula-safe)
   storage.ts         photo/signature storage (local disk today; S3/Azure later behind the same interface)
 public/              the web app (plain HTML/CSS/JS modules, no framework), service worker, diagrams
   js/views/          one module per screen (home, truck, form, detail, repairs, tickets, yard, csv, export, admin…)
-  js/drafts.js, svc.js, yardq.js, equipq.js, esvcq.js   what's saved on the phone and the upload queues
-                     (inspections, maintenance, yard walks, equipment checks, equipment maintenance)
+  js/drafts.js, svc.js, yardq.js, equipq.js, esvcq.js, incq.js   what's saved on the phone and the upload queues
+                     (inspections, maintenance, yard walks, equipment checks, equipment maintenance, incident reports)
 db/migrations/       numbered SQL migrations, applied automatically on start (never edit one that has shipped)
 seed/vehicles.csv    trucks added on start if missing (never overwrites edits made in Admin)
 scripts/             backup.sh (nightly, run by the backup container), restore.sh, burnin.ts (burn-in test)
 test/                API tests against a real Postgres, plus browser-file and CSV checks
-prototype/, reference/   the approved claude.ai prototype and the original paper forms
+prototype/, reference/   the approved claude.ai prototype and the original paper forms (reference/incidents/: GC's
+                     incident report forms, which the incident PDF follows)
 ```
 
 ## Run it on the server

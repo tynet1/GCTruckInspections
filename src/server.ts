@@ -21,6 +21,7 @@ import yardRoutes from "./routes/yard.ts";
 import equipmentRoutes from "./routes/equipment.ts";
 import equipmentServiceRoutes from "./routes/equipment-service.ts";
 import fleetRoutes from "./routes/fleet.ts";
+import incidentRoutes from "./routes/incidents.ts";
 import authRoutes from "./routes/auth.ts";
 import brandingRoutes from "./routes/branding.ts";
 import inspectionRoutes from "./routes/inspections.ts";
@@ -128,6 +129,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
       await api.register(equipmentRoutes);
       await api.register(equipmentServiceRoutes);
       await api.register(fleetRoutes);
+      await api.register(incidentRoutes);
       api.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 404, message: "Not found." }));
     },
     { prefix: "/api" },

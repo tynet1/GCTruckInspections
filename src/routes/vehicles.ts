@@ -44,12 +44,13 @@ export interface DamageMark {
   id: number;
   n: number;                 // 1, 2, 3… per picture (truck / trailer), oldest first; stays the same as more is added
   diagram: "truck" | "trailer";
-  seq: number;               // its number on the inspection it was marked on
+  seq: number;               // its number on the inspection (or incident) it was marked on
   x: number;
   y: number;
   note: string | null;
-  inspection_id: string;
-  inspection_date: string;
+  inspection_id: string | null; // the inspection it was marked on, or
+  incident_id: string | null;   // the incident report it was marked on (018)
+  inspection_date: string;      // the date it was marked: the inspection's or the incident's date
   trailer_number: string | null;
   on_current_diagram: boolean; // false if the truck's picture (or trailer type) changed since, so it can't be drawn
   photos: { id: string; caption: string | null }[];
@@ -67,31 +68,30 @@ export interface DamageRepair {
 
 /**
  * Every damage mark ever recorded on this truck, oldest first. Crews only mark new damage on each inspection,
- * so the truck's damage on file is all of these together, not just the last inspection's.
+ * so the truck's damage on file is all of these together, not just the last inspection's. Damage pinned on an
+ * incident report is on file too (live_damage_marks, 018).
  */
 export async function damageHistory(vehicleId: number, current: { diagram_id: number | null; trailer_diagram_id: number | null }) {
   const marks = await q(
-    `SELECT dm.id, dm.diagram, dm.seq, dm.x, dm.y, dm.note, i.id AS inspection_id, i.inspection_date,
-            i.trailer_number_text AS trailer_number,
-            CASE WHEN dm.diagram = 'truck' THEN i.truck_diagram_id ELSE i.trailer_diagram_id END AS drawn_on
-       FROM damage_marks dm JOIN live_inspections i ON i.id = dm.inspection_id
-      WHERE i.vehicle_id = $1
-      ORDER BY i.inspection_date, i.created_at, dm.seq`,
+    `SELECT dm.id, dm.diagram, dm.seq, dm.x, dm.y, dm.note, dm.inspection_id, dm.incident_id,
+            dm.marked_on AS inspection_date, dm.trailer_number, dm.drawn_on
+       FROM live_damage_marks dm
+      WHERE dm.vehicle_id = $1
+      ORDER BY dm.marked_on, dm.record_created_at, dm.seq`,
     [vehicleId],
   );
   const photos = await q(
     `SELECT p.id, p.caption, p.damage_mark_id
-       FROM photos p JOIN damage_marks dm ON dm.id = p.damage_mark_id JOIN live_inspections i ON i.id = dm.inspection_id
-      WHERE i.vehicle_id = $1 ORDER BY p.created_at, p.id`,
+       FROM photos p JOIN live_damage_marks dm ON dm.id = p.damage_mark_id
+      WHERE dm.vehicle_id = $1 ORDER BY p.created_at, p.id`,
     [vehicleId],
   );
   const repairs = await q(
     `SELECT dr.id, dr.damage_mark_id, dr.repaired_at, dr.note, dr.service_log_id, u.name AS repaired_by_name
        FROM damage_repairs dr
        JOIN users u ON u.id = dr.repaired_by
-       JOIN damage_marks dm ON dm.id = dr.damage_mark_id
-       JOIN live_inspections i ON i.id = dm.inspection_id
-      WHERE i.vehicle_id = $1 AND dr.active`,
+       JOIN live_damage_marks dm ON dm.id = dr.damage_mark_id
+      WHERE dm.vehicle_id = $1 AND dr.active`,
     [vehicleId],
   );
   const repairPhotos = repairs.length
@@ -139,7 +139,9 @@ async function markRepaired(markId: number, userId: number, body: unknown) {
 
   return tx(async (c) => {
     const m = (await c.query(
-      `SELECT dm.id, EXISTS (SELECT 1 FROM inspection_states s WHERE s.inspection_id = dm.inspection_id AND s.state <> 'active') AS hidden
+      `SELECT dm.id,
+              EXISTS (SELECT 1 FROM inspection_states s WHERE s.inspection_id = dm.inspection_id AND s.state <> 'active')
+              OR EXISTS (SELECT 1 FROM incident_states s WHERE s.incident_id = dm.incident_id AND s.state <> 'active') AS hidden
          FROM damage_marks dm WHERE dm.id = $1 FOR UPDATE`,
       [markId],
     )).rows[0];
@@ -339,15 +341,17 @@ export default async function vehicleRoutes(app: FastifyInstance) {
         ORDER BY inspection_date DESC, created_at DESC LIMIT 1`,
       [id],
     );
-    if (!last) return { inspection: null, damage: [] };
     const [now] = await vehicleRows("WHERE vs.id = $1", [id]);
-    if (!now) throw notFound("Truck not found.");
+    if (!now) {
+      if (!last) return { inspection: null, damage: [] };
+      throw notFound("Truck not found.");
+    }
     // Old pins only make sense on the same picture: skip any drawn on a diagram the truck no longer uses,
-    // and any marked repaired.
+    // and any marked repaired. A truck never inspected can still have damage on file from an incident report.
     const damage = (await damageHistory(id, now))
       .filter((m) => m.on_current_diagram && !m.repair)
       .map(({ photos: _p, on_current_diagram: _c, repair: _r, ...m }) => m);
-    return { inspection: last, damage };
+    return { inspection: last ?? null, damage };
   });
 
   // Everything the inspection form needs that isn't truck-specific.

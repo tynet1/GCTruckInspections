@@ -162,16 +162,45 @@ export default async function exportRoutes(app: FastifyInstance) {
         LIMIT $${params.length}`,
       params,
     );
+    // Damage pinned on an incident report is a repair until it's marked repaired (018).
+    const dparams: unknown[] = [];
+    const dwhere = scope(f, "n.incident_date", dparams);
+    if (!f.more) dwhere.push("dr.id IS NULL");
+    dparams.push(MAX_ROWS);
+    const dmg = await q(
+      `SELECT v.truck_code, ${VEHICLE} AS vehicle, dm.diagram, dm.seq, dm.note, n.id AS incident_id, n.incident_date,
+              n.reporter_name, (COALESCE(dr.repaired_at::date, current_date) - n.incident_date) AS days_open,
+              dr.repaired_at, ru.name AS repaired_by_name, dr.note AS repair_note, dr.service_log_id,
+              (SELECT count(*) FROM photos p WHERE p.damage_mark_id = dm.id) AS photos
+         FROM damage_marks dm
+         JOIN live_incidents n ON n.id = dm.incident_id
+         JOIN vehicles v ON v.id = n.vehicle_id
+         LEFT JOIN damage_repairs dr ON dr.damage_mark_id = dm.id AND dr.active
+         LEFT JOIN users ru ON ru.id = dr.repaired_by
+        WHERE v.active ${dwhere.length ? "AND " + dwhere.join(" AND ") : ""}
+        ORDER BY v.truck_code, n.incident_date, n.created_at, dm.diagram DESC, dm.seq
+        LIMIT $${dparams.length}`,
+      dparams,
+    );
     const link = linkBase(req);
+    const out = [
+      ...rows.map((r) => ({ truck: r.truck_code as string, date: String(r.inspection_date), row: [
+        r.truck_code, r.vehicle, SECTION[r.section] ?? r.section, r.label, r.note, r.inspection_date, r.inspector_name,
+        r.resolved_at ? "Fixed" : "Open", num(r.days_open), r.resolved_at, r.resolved_by_name, r.resolution_note,
+        r.service_log_id ? `${link}service/${r.service_log_id}` : null,
+        (r.ticket_ids as number[]).map(ticketNumber).join("; "), num(r.photos), `${link}inspection/${r.inspection_id}`,
+      ] as Cell[] })),
+      ...dmg.map((r) => ({ truck: r.truck_code as string, date: String(r.incident_date), row: [
+        r.truck_code, r.vehicle, "Incident damage", `${r.diagram === "trailer" ? "Trailer damage" : "Damage"} ${r.seq}`, r.note,
+        r.incident_date, r.reporter_name, r.repaired_at ? "Fixed" : "Open", num(r.days_open), r.repaired_at, r.repaired_by_name,
+        r.service_log_id ? null : r.repair_note, r.service_log_id ? `${link}service/${r.service_log_id}` : null,
+        "", num(r.photos), `${link}incident/${r.incident_id}`,
+      ] as Cell[] })),
+    ].sort((a, b) => a.truck.localeCompare(b.truck) || a.date.localeCompare(b.date));
     return send(reply, req, f.more ? "repairs" : "open_repairs", f, [
       "Truck", "Vehicle", "Section", "Item", "Note", "Reported", "Reported by", "Status", "Days open", "Fixed at",
-      "Fixed by", "How it was fixed", "Maintenance entry", "Repair tickets", "Photos", "Inspection link",
-    ], rows.map((r) => [
-      r.truck_code, r.vehicle, SECTION[r.section] ?? r.section, r.label, r.note, r.inspection_date, r.inspector_name,
-      r.resolved_at ? "Fixed" : "Open", num(r.days_open), r.resolved_at, r.resolved_by_name, r.resolution_note,
-      r.service_log_id ? `${link}service/${r.service_log_id}` : null,
-      (r.ticket_ids as number[]).map(ticketNumber).join("; "), num(r.photos), `${link}inspection/${r.inspection_id}`,
-    ]));
+      "Fixed by", "How it was fixed", "Maintenance entry", "Repair tickets", "Photos", "Report link",
+    ], out.map((o) => o.row));
   });
 
   // One row per maintenance entry; voided ones only with include=1.
@@ -228,7 +257,7 @@ export default async function exportRoutes(app: FastifyInstance) {
               CASE WHEN v.pulls_trailer THEN COALESCE(td.name, (SELECT name FROM diagrams WHERE kind = 'trailer' ORDER BY id LIMIT 1)) END AS trailer_type,
               v.active, li.inspection_date AS last_inspection_date, li.status AS last_status,
               GREATEST(li.mileage, (SELECT max(s.mileage) FROM service_logs s WHERE s.vehicle_id = v.id AND s.voided_at IS NULL)) AS last_mileage,
-              coalesce(orc.n, 0) AS open_repairs, coalesce(dof.n, 0) AS damage_on_file,
+              coalesce(orc.n, 0) + coalesce(idm.n, 0) AS open_repairs, coalesce(dof.n, 0) AS damage_on_file,
               ls.service_date AS last_service_date
          FROM vehicles v
          LEFT JOIN diagrams td ON td.id = v.trailer_diagram_id
@@ -236,10 +265,16 @@ export default async function exportRoutes(app: FastifyInstance) {
          LEFT JOIN (
            SELECT i.vehicle_id, count(*) AS n FROM inspection_items ii JOIN live_inspections i ON i.id = ii.inspection_id
             WHERE ii.result = 'repair' AND ii.resolved_at IS NULL GROUP BY i.vehicle_id) orc ON orc.vehicle_id = v.id
+         -- Incident damage not yet repaired is a repair too (018), as on the truck list.
          LEFT JOIN (
-           SELECT i.vehicle_id, count(*) AS n FROM damage_marks dm JOIN live_inspections i ON i.id = dm.inspection_id
+           SELECT dm.vehicle_id, count(*) AS n FROM live_damage_marks dm
+            WHERE dm.incident_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM damage_repairs dr WHERE dr.damage_mark_id = dm.id AND dr.active)
+            GROUP BY dm.vehicle_id) idm ON idm.vehicle_id = v.id
+         LEFT JOIN (
+           SELECT dm.vehicle_id, count(*) AS n FROM live_damage_marks dm
             WHERE NOT EXISTS (SELECT 1 FROM damage_repairs dr WHERE dr.damage_mark_id = dm.id AND dr.active)
-            GROUP BY i.vehicle_id) dof ON dof.vehicle_id = v.id
+            GROUP BY dm.vehicle_id) dof ON dof.vehicle_id = v.id
          LEFT JOIN LATERAL (
            SELECT inspection_date, mileage, status FROM live_inspections
             WHERE vehicle_id = v.id ORDER BY inspection_date DESC, created_at DESC LIMIT 1) li ON true

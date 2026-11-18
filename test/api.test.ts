@@ -2428,10 +2428,12 @@ if (!url) {
       await assert.rejects(q(`DELETE FROM diagrams WHERE id = $1`, [d.id]), /can't be deleted/);
     });
 
-    test("the truck list's open repair counts match a count truck by truck (016)", async () => {
+    test("the truck list's open repair counts match a count truck by truck (016, 018)", async () => {
       const rows = await q(`SELECT vs.id, vs.open_repairs,
           (SELECT count(*) FROM inspection_items ii JOIN live_inspections i ON i.id = ii.inspection_id
-            WHERE i.vehicle_id = vs.id AND ii.result = 'repair' AND ii.resolved_at IS NULL) AS direct
+            WHERE i.vehicle_id = vs.id AND ii.result = 'repair' AND ii.resolved_at IS NULL)
+          + (SELECT count(*) FROM damage_marks dm JOIN live_incidents n ON n.id = dm.incident_id
+            WHERE n.vehicle_id = vs.id AND NOT EXISTS (SELECT 1 FROM damage_repairs dr WHERE dr.damage_mark_id = dm.id AND dr.active)) AS direct
           FROM vehicle_status vs`);
       assert.ok(rows.some((r) => r.direct > 0), "some trucks have open repairs in the test data");
       for (const r of rows) assert.equal(r.open_repairs, r.direct, `truck ${r.id}`);

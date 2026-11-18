@@ -1,6 +1,7 @@
-// Burn-in test (SPEC §9 phase 3): many simulated phones submit truck inspections, yard walks, equipment checks and
-// maintenance (with photos) through a deliberately bad connection, while the app crashes and the database restarts.
-// At the end every record a phone made must exist exactly once, complete (all checklist answers and photos).
+// Burn-in test (SPEC §9 phase 3): many simulated phones submit truck inspections, yard walks, equipment checks,
+// maintenance and incident reports (with photos) through a deliberately bad connection, while the app crashes and the
+// database restarts. At the end every record a phone made must exist exactly once, complete (all checklist answers,
+// damage marks and photos).
 //
 // Never point it at real data: it needs an empty, throwaway database (the app migrates it on start).
 //
@@ -148,7 +149,7 @@ function raw(method: string, path: string, body: Buffer | string | null, headers
 
 // ---------- Phones ----------
 
-type Kind = "inspection" | "yard" | "check" | "service" | "equipment_service";
+type Kind = "inspection" | "yard" | "check" | "service" | "equipment_service" | "incident";
 interface Op { kind: Kind; clientId: string; endpoint: string; body: any; photos: string[]; items: number; confirmed: boolean; tries: number }
 const ledger: Op[] = [];
 const stats = { retries: 0, signIns: 0, photoUploads: 0, rejected: [] as string[] };
@@ -299,6 +300,24 @@ function equipmentServiceOp(): Op {
   return { kind: "equipment_service", clientId: body.client_id, endpoint: "/equipment-service", body, photos, items: 0, confirmed: false, tries: 0 };
 }
 
+/** A supervisor's incident report (018): damage pins with photos, a map, other parties, a drawing and signatures. */
+function incidentOp(): Op {
+  const photos = withPhotos(1 + rnd(4));
+  const marks = 1 + rnd(3);
+  const damage = Array.from({ length: marks }, (_, i) => ({ key: `d${i}`, diagram: "truck", x: Math.random(), y: Math.random(), note: `Dent ${i + 1}` }));
+  const hurt = Math.random() < 0.2;
+  const body = {
+    client_id: randomUUID(), vehicle_id: pick(vehicles).id, incident_date: ymd(), incident_time: "14:30", location_name: "Burn-in Rd",
+    street: "Main St & 1st Ave", city: "Phoenix", state: "AZ", police_present: Math.random() < 0.5, anyone_injured: hurt, employee_injured: hurt,
+    driver_name: "Burn-in Driver", description: "Rear-ended at a light.", reporter_name: "Burn-in Sup",
+    other_parties: [{ name: "Other Driver", plate_no: "BURN1", insurance_company: "Acme" }], witnesses: Math.random() < 0.5 ? [{ name: "Witness" }] : [],
+    damage,
+    photos: photos.map((id, i) => ({ id, caption: `Photo ${i + 1}`, damage_key: i < marks ? `d${i}` : null, map: i === photos.length - 1 && i >= marks })),
+    sketch: PNG, driver_signature: Math.random() < 0.7 ? PNG : null, reporter_signature: PNG,
+  };
+  return { kind: "incident", clientId: body.client_id, endpoint: "/incidents", body, photos, items: marks, confirmed: false, tries: 0 };
+}
+
 // ---------- Setup ----------
 
 async function setup(): Promise<Phone[]> {
@@ -353,7 +372,7 @@ async function phoneLoop(p: Phone, role: "crew" | "sup" | "shop", until: number)
   while (Date.now() < until) {
     await sleep(2000 + rnd(12_000));
     const make = role === "crew" ? inspectionOp
-      : role === "sup" ? (Math.random() < 0.5 ? yardOp : inspectionOp)
+      : role === "sup" ? pick([yardOp, yardOp, inspectionOp, incidentOp])
       : pick([checkOp, serviceOp, equipmentServiceOp]);
     const op = make();
     ledger.push(op);
@@ -377,6 +396,7 @@ async function verify() {
     check: { table: "equipment_checks", items: "SELECT count(*) FROM equipment_check_items WHERE check_id = t.id", photos: "equipment_check_id" },
     service: { table: "service_logs", photos: "service_log_id" },
     equipment_service: { table: "equipment_service_logs", photos: "equipment_service_log_id" },
+    incident: { table: "incidents", items: "SELECT count(*) FROM damage_marks WHERE incident_id = t.id", photos: "incident_id" },
   };
   const summary: Record<string, { made: number; found: number; extra: number }> = {};
   for (const [kind, t] of Object.entries(tables) as [Kind, typeof tables[Kind]][]) {

@@ -101,6 +101,8 @@ input.missing,textarea.missing,.seg.missing,canvas.missing,.repairrow.missing in
 .addph input{position:absolute;inset:0;opacity:0;width:100%;height:100%}
 .sig{width:100%;height:170px;border:1px solid var(--line);border-radius:11px;background:#fff;touch-action:none;display:block}
 .sigimg{max-width:100%;height:90px;display:block}
+.sig.sketch{height:340px}
+.sketchimg{display:block;max-width:100%;border:1px solid var(--line);border-radius:11px;background:#fff;cursor:zoom-in}
 .toggle{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .sw{position:relative;width:54px;height:32px;border-radius:999px;background:#cfd5cc;border:0;flex:0 0 auto}
 .sw::before{content:"";position:absolute;inset:-8px -4px}/* 48px tall tap area */

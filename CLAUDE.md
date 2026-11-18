@@ -48,7 +48,8 @@ npm run user -- add --name "X" --role crew --pin 1234
   with `docs/DEPLOY.md` §6 (labeled backup first, rebuild under `nohup`, then compare the data before and after).
 - Phase 1 (MVP) is built, plus trailer types and branding. Phase 2: the maintenance log is built (`src/routes/service.ts`,
   `public/js/svc.js`, `views/service-*.js`), and so is batch PDF export (`views/export.js`, `public/js/zip.js`), and
-  everything since (see SPEC §9: repair tickets, checklist editor, yard walks, equipment, fleet status/reminders).
+  everything since (see SPEC §9: repair tickets, checklist editor, yard walks, equipment, fleet status/reminders,
+  incident reports: `src/routes/incidents.ts`, `src/incident-pdf.ts`, `public/js/incq.js`, `views/incident*.js`).
   Phase 3 (code review, performance, burn-in, data-loss review) was done 2026-11-18: `docs/PHASE3-REVIEW.md`. Rerun
   `scripts/burnin.ts` after any change to how records, photos or the outboxes are saved.
 - Ask Tyler before choosing a remote-access method other than Cloudflare Tunnel, or before adding paid services.
