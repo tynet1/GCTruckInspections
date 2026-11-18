@@ -6,6 +6,7 @@ import { atLeast, can, errorHtml, homeHeader, stale, state } from "../ui.js";
 import { $, daysAgo, esc, fmtDate, vehicleInfo } from "../util.js";
 import { inspectionRow, serviceRow } from "./common.js";
 import { yardPills } from "./yard.js";
+import { statusPill } from "./fleet.js";
 
 let query = "";
 
@@ -26,13 +27,14 @@ export async function render(app) {
   app.innerHTML = `
     <input class="search" id="q" type="search" placeholder="Search truck, plate, VIN…" value="${esc(query)}" autocomplete="off" aria-label="Search trucks">
     ${can.seeService() ? `<a class="secondary wide" id="rbLink" href="#/repairs" style="margin-top:12px">Repairs board</a>` : ""}
+    <div id="remBox"></div>
     <div id="yardBox"></div>
     <div id="equipBox"></div>
     <div id="review"></div>
     <h2>Pick a truck</h2><div id="trucks"><div class="empty">Loading trucks…</div></div>
     ${recentBlocks()}`;
 
-  const [vehicles, recent, drafts, unreviewed, recentSvc, yards, equip] = await Promise.all([
+  const [vehicles, recent, drafts, unreviewed, recentSvc, yards, equip, reminders] = await Promise.all([
     api("/vehicles").catch((e) => e),
     api("/inspections?limit=15").catch((e) => e),
     allDrafts().catch(() => []),
@@ -40,12 +42,20 @@ export async function render(app) {
     can.seeService() ? api("/service-logs?limit=10").catch((e) => e) : null,
     can.seeService() ? api("/yards").catch(() => null) : null,
     can.seeService() ? api("/equipment").catch(() => null) : null,
+    can.seeService() ? api("/reminders").catch(() => null) : null,
   ]);
   if (stale(nav)) return;
   if (recentSvc) {
     $("#recentSvc").innerHTML = recentSvc instanceof Error
       ? errorHtml(recentSvc)
       : recentSvc.length ? recentSvc.map((s) => serviceRow(s, { showTruck: true })).join("") : `<div class="empty">No maintenance logged yet.</div>`;
+  }
+
+  if (reminders) {
+    $("#remBox").innerHTML = `<div class="card list" style="margin-top:12px"><a class="item" href="#/reminders"><span class="grow"><b>Reminders</b>
+        <span class="small muted clip">Registrations, inspections, maintenance and checks</span></span>
+      <span class="row" style="justify-content:flex-end;flex-wrap:nowrap">${reminders.due ? `<span class="pill bad">${reminders.due} due</span>` : ""}
+        ${reminders.soon ? `<span class="pill warn">${reminders.soon} soon</span>` : ""}${!reminders.due && !reminders.soon ? `<span class="pill okk">All clear</span>` : ""}</span></a></div>`;
   }
 
   // The yard: a reminder until today's walk is done, and open findings until they're resolved.
@@ -95,6 +105,7 @@ export async function render(app) {
           ${n ? `<span class="pill bad">${n} open repair${n > 1 ? "s" : ""}</span>` : ""}
           ${dr ? `<span class="pill ${dr.status === "queued" ? "warn" : ""}">${dr.status === "queued" ? "Waiting to upload" : "Draft"}</span>` : ""}
           ${v.registration_expired ? `<span class="pill bad">Reg expired</span>` : ""}
+          ${statusPill(v.status, { quiet: true })}
         </span></a>`;
     }).join("")}</div>`;
   }

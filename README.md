@@ -17,7 +17,7 @@ drafts stay on the phone and upload when signal returns.
 |---|---|
 | Sign in: crew name + PIN (30-day session), supervisor/admin email + password | done |
 | Home: search trucks; badges for last inspection (amber over 35 days), open repairs, draft, registration expired | done |
-| Truck page: start/resume, open repairs from all inspections, damage on file, maintenance, repair tickets, history | done |
+| Truck page: start/resume, status and trailer, open repairs from all inspections, damage on file, maintenance, repair tickets, history | done |
 | Inspection form: same order as paper; damage pins, with all damage already on file shown as grey dots and listed; photos on pins and repairs; trailer section; finger signature; save bar lists what's missing | done |
 | Offline: draft autosaves to the phone (IndexedDB); uploads retry with backoff; "Saved on phone, not yet uploaded"; duplicate-proof submit (`client_id`) | done |
 | Inspection detail: repairs first, pins, photo gallery, full checklist, supervisor sign-off, resolve repairs | done |
@@ -37,7 +37,7 @@ drafts stay on the phone and upload when signal returns.
 | Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve / Ticket | done |
 | CSV export: inspections, repairs, maintenance log, trucks, with truck/date filters (Download CSV in the menu) | done |
 | Checklist editor (Admin → Checklist: truck inspection, yard walk or equipment): add, reword, reorder, retire and restore items, with a change history. New inspections only; submitted ones keep their items and wording, and a form already open on a phone still sends | done |
-| Fleet management: status (in service, in the shop, on hold, preparing for return, returned, sold), trailers that move between trucks, a reminders list for supervisors | next (scope answered 2026-11-17; lease details wait until Tyler has them) |
+| Fleet management: truck status (in service, in the shop, on hold, preparing for return, returned, sold, retired) with history; trailers moved between trucks; a reminders list (registrations, inspections, maintenance, equipment, yard) | done (lease details and the lease-return checklist wait until Tyler has them) |
 
 ## Wishlist (SPEC §9 item 5)
 
@@ -67,7 +67,7 @@ Build order and every answered question are in SPEC §9. Phase 3 after that: ful
 src/                 Fastify API (TypeScript, run directly by Node 24, no build step)
   routes/            auth, vehicles, photos, inspections, service (maintenance), tickets, export (CSV),
                      checklist (editor), yard (yard walks), equipment (trailers, equipment, checks),
-                     equipment-service (equipment maintenance), admin, branding
+                     equipment-service (equipment maintenance), fleet (status, trailers, reminders), admin, branding
   photo-owners.ts    the one list of records a photo can belong to (used by every photo check and the clean-up)
   pdf.ts             paper-form HTML template -> PDF via headless Chromium
   ticket-pdf.ts      repair ticket PDF

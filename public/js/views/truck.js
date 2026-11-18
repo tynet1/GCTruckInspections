@@ -7,6 +7,7 @@ import { $, confirmBox, esc, fmtDate, fmtNum, lightbox, modal, shrinkImage, toas
 import { inspectionRow, repairButtons, resolveRepair, SECTION_TITLES, serviceRow } from "./common.js";
 import { regHistoryHtml, regValue, updateRegistration } from "./registration.js";
 import { makeTicket, openTicket, ticketPills, ticketsSection } from "./tickets.js";
+import { changeStatus, changeTrailer, statusHistoryHtml, statusValue, trailerValue } from "./fleet.js";
 
 let showAllService = false;
 let showAllDamage = false;
@@ -17,14 +18,15 @@ export async function render(app, id) {
   if (id !== lastTruck) { showAllService = false; showAllDamage = false; lastTruck = id; }
   setHeader({ title: "Truck", back: "#/" });
   app.innerHTML = `<div class="empty">Loading…</div>`;
-  let data, draft, svc, svcDraft, tickets;
+  let data, draft, svc, svcDraft, tickets, statusLog;
   try {
-    [data, draft, svc, svcDraft, tickets] = await Promise.all([
+    [data, draft, svc, svcDraft, tickets, statusLog] = await Promise.all([
       api(`/vehicles/${id}`),
       getDraft(id),
       can.seeService() ? api(`/vehicles/${id}/service`).catch((e) => e) : null,
       getSvcDraft(`new-${id}`).catch(() => null),
       can.seeService() ? api(`/vehicles/${id}/repair-tickets`).catch(() => []) : [],
+      can.seeService() ? api(`/vehicles/${id}/status-history`).catch(() => []) : [],
     ]);
   } catch (e) {
     if (!stale(nav)) app.innerHTML = errorHtml(e);
@@ -43,8 +45,9 @@ export async function render(app, id) {
       <b>Info</b><span>${esc(vehicleInfo(v) || "—")}</span>
       <b>Reg exp.</b>${regValue(v.registration_expires)}
       <b>Last miles</b><span>${v.last_mileage != null ? fmtNum(v.last_mileage) : "—"}</span>
-      <b>Trailer</b><span>${v.pulls_trailer ? esc(v.trailer_type || "Yes") : "None"}</span>
-    </div>${regHistoryHtml(data.registration)}</div>`;
+      <b>Trailer</b>${trailerValue(v)}
+      <b>Status</b>${statusValue(v)}
+    </div>${regHistoryHtml(data.registration)}${statusHistoryHtml(statusLog)}</div>`;
 
   if (draft?.status === "queued") {
     h += `<div class="banner info"><b>Saved on phone, not yet uploaded.</b><br>${esc(draft.lastError || "Uploading…")}.
@@ -86,6 +89,16 @@ export async function render(app, id) {
     flush();
     if (!stale(nav)) render(app, id);
   };
+  const sb = app.querySelector("[data-status]");
+  if (sb) sb.onclick = async () => {
+    const st = await changeStatus(v);
+    if (!st || stale(nav)) return;
+    // Out of the fleet: the truck page is for trucks in it, so go home.
+    if (["returned", "sold", "retired"].includes(st)) location.hash = "#/";
+    else render(app, id);
+  };
+  const tb = app.querySelector("[data-trailer]");
+  if (tb) tb.onclick = async () => { if ((await changeTrailer(v)) && !stale(nav)) render(app, id); };
   const ru = app.querySelector("[data-regupd]");
   if (ru) ru.onclick = async () => {
     if ((await updateRegistration(v, { from: "truck" })) && !stale(nav)) render(app, id);

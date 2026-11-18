@@ -2256,4 +2256,115 @@ if (!url) {
       assert.equal(reuse.json().details?.code, "photos_missing", "a photo on one entry can't go on another");
     });
   });
+
+  describe("fleet", () => {
+    let shopCookie = "";
+    let adminCookie = "";
+    const truck: Record<string, number> = {};
+    const ymd = (days = 0) => {
+      const d = new Date(Date.now() + days * 86400_000);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const signIn = async (path: string, payload: object, ip: string) => cookieOf(await app.inject({
+      method: "POST", url: `/api/auth/${path}`, remoteAddress: "172.18.0.5", headers: { ...H, "x-forwarded-for": ip }, payload,
+    }));
+    const setStatus = (cookie: string, code: string, status: string, note?: string) =>
+      inject("POST", `/vehicles/${truck[code]}/status`, { cookie, body: { status, note } });
+    const history = async (code: string) => (await inject("GET", `/vehicles/${truck[code]}/status-history`, { cookie: supCookie })).json() as
+      { previous: string; status: string; note: string | null; changed_by_name: string | null }[];
+
+    before(async () => {
+      const shop = await one(`SELECT id FROM users WHERE name = 'Frank Shop'`);
+      shopCookie = await signIn("pin", { user_id: shop.id, pin: "1357" }, "203.0.113.253");
+      adminCookie = await signIn("login", { email: "admin@test.local", password: "admin-password-1" }, "203.0.113.254");
+      for (const r of await q(`SELECT id, truck_code FROM vehicles WHERE truck_code IN ('AZ030', 'AZ032', 'AZ035', 'AZ036', 'AZ039', 'AZ043', 'AZ048')`)) {
+        truck[r.truck_code] = r.id;
+      }
+    });
+
+    test("a truck's status: who may set what, every change kept; out-of-fleet statuses take it off the lists", async () => {
+      assert.equal((await setStatus(crewCookie, "AZ030", "in_shop")).statusCode, 403);
+      assert.equal((await setStatus(shopCookie, "AZ030", "in_shop", "Brakes at Discount Tire")).statusCode, 200);
+      assert.equal((await setStatus(shopCookie, "AZ030", "in_shop")).statusCode, 409, "already in the shop");
+      assert.equal((await setStatus(shopCookie, "AZ030", "returned")).statusCode, 403, "the shop can't take a truck out of the fleet");
+      assert.equal((await setStatus(supCookie, "AZ030", "flying")).statusCode, 400);
+      const list = (await inject("GET", "/vehicles", { cookie: crewCookie })).json();
+      assert.equal(list.find((v: { id: number }) => v.id === truck.AZ030).status, "in_shop");
+      assert.deepEqual((await history("AZ030")).map((h) => [h.previous, h.status, h.note, h.changed_by_name]),
+        [["in_service", "in_shop", "Brakes at Discount Tire", "Frank Shop"]]);
+
+      assert.equal((await setStatus(supCookie, "AZ030", "returned", "Lease ended")).statusCode, 200);
+      assert.equal((await one(`SELECT active FROM vehicles WHERE id = $1`, [truck.AZ030])).active, false);
+      assert.ok(!(await inject("GET", "/vehicles", { cookie: crewCookie })).json().some((v: { id: number }) => v.id === truck.AZ030),
+        "a returned truck is off the crews' list");
+      assert.equal((await setStatus(shopCookie, "AZ030", "in_service")).statusCode, 403, "only a supervisor brings it back");
+      assert.equal((await setStatus(supCookie, "AZ030", "in_service")).statusCode, 200);
+      assert.equal((await one(`SELECT active FROM vehicles WHERE id = $1`, [truck.AZ030])).active, true);
+
+      // Admin's Active switch keeps the status in step, and says who did it.
+      assert.equal((await inject("PATCH", `/admin/vehicles/${truck.AZ032}`, { cookie: adminCookie, body: { active: false } })).statusCode, 200);
+      assert.equal((await one(`SELECT status FROM vehicles WHERE id = $1`, [truck.AZ032])).status, "retired");
+      const h32 = (await history("AZ032"))[0];
+      assert.deepEqual([h32.previous, h32.status, h32.note, h32.changed_by_name], ["in_service", "retired", "Admin → Trucks", "Admin"]);
+      await inject("PATCH", `/admin/vehicles/${truck.AZ032}`, { cookie: adminCookie, body: { active: true } });
+      assert.equal((await one(`SELECT status FROM vehicles WHERE id = $1`, [truck.AZ032])).status, "in_service");
+      // A change made outside the app is still recorded, without a user.
+      await q(`UPDATE vehicles SET status = 'on_hold' WHERE id = $1`, [truck.AZ035]);
+      assert.deepEqual((await history("AZ035")).map((h) => [h.status, h.changed_by_name]), [["on_hold", null]]);
+      await q(`UPDATE vehicles SET status = 'in_service' WHERE id = $1`, [truck.AZ035]);
+      await assert.rejects(q(`DELETE FROM vehicle_status_changes WHERE vehicle_id = $1`, [truck.AZ030]));
+      await assert.rejects(q(`UPDATE vehicle_status_changes SET note = 'x' WHERE vehicle_id = $1`, [truck.AZ030]));
+    });
+
+    test("trailers sit on one truck at a time; moving one is kept; the form gets the truck's trailer", async () => {
+      const t8 = (await inject("POST", "/admin/trailers", { cookie: adminCookie, body: { trailer_number: "T-8", plate: "TR8" } })).json().id;
+      const t9 = (await inject("POST", "/admin/trailers", { cookie: adminCookie, body: { trailer_number: "T-9" } })).json().id;
+      const assign = (cookie: string, id: number, vehicleId: number | null) =>
+        inject("POST", `/trailers/${id}/assign`, { cookie, body: { vehicle_id: vehicleId } });
+      assert.equal((await assign(crewCookie, t8, truck.AZ036)).statusCode, 403);
+      assert.equal((await assign(supCookie, t8, truck.AZ036)).json().moved, true);
+      const detail = (await inject("GET", `/vehicles/${truck.AZ036}`, { cookie: crewCookie })).json();
+      assert.deepEqual([detail.vehicle.trailer.trailer_number, detail.vehicle.trailer.plate], ["T-8", "TR8"]);
+      assert.equal((await assign(shopCookie, t9, truck.AZ036)).statusCode, 200, "a second trailer bumps the first off");
+      assert.equal((await one(`SELECT vehicle_id FROM trailers WHERE id = $1`, [t8])).vehicle_id, null);
+      assert.equal((await assign(supCookie, t9, truck.AZ039)).statusCode, 200);
+      assert.equal((await inject("GET", `/vehicles/${truck.AZ036}`, { cookie: crewCookie })).json().vehicle.trailer, null);
+      const moves = await q(`SELECT trailer_id, before->>'vehicle_id' AS f, after->>'vehicle_id' AS t FROM asset_changes
+                              WHERE trailer_id IN ($1, $2) AND action = 'moved' ORDER BY id`, [t8, t9]);
+      assert.deepEqual(moves.map((m: { trailer_id: number; f: string | null; t: string | null }) => [m.trailer_id, m.f, m.t]), [
+        [t8, null, String(truck.AZ036)], [t8, String(truck.AZ036), null], [t9, null, String(truck.AZ036)], [t9, String(truck.AZ036), String(truck.AZ039)],
+      ]);
+      const listed = (await inject("GET", "/trailers", { cookie: shopCookie })).json();
+      assert.equal(listed.find((x: { id: number }) => x.id === t9).truck_code, "AZ039");
+      await inject("PATCH", `/admin/trailers/${t8}`, { cookie: adminCookie, body: { active: false } });
+      assert.equal((await assign(supCookie, t8, truck.AZ036)).statusCode, 404, "a retired trailer can't be put on a truck");
+      await setStatus(supCookie, "AZ043", "sold");
+      assert.equal((await assign(supCookie, t9, truck.AZ043)).statusCode, 400, "nor go on a truck that's out of the fleet");
+      await setStatus(supCookie, "AZ043", "in_service");
+    });
+
+    test("reminders: registrations, overdue inspections, truck and equipment maintenance, equipment checks", async () => {
+      assert.equal((await inject("GET", "/reminders", { cookie: crewCookie })).statusCode, 403);
+      await q(`UPDATE vehicles SET registration_expires = $2 WHERE id = $1`, [truck.AZ048, ymd(-1)]);
+      await q(`UPDATE vehicles SET registration_expires = $2 WHERE id = $1`, [truck.AZ039, ymd(10)]);
+      const oil = await inject("POST", "/service-logs", { cookie: shopCookie, body: {
+        client_id: randomUUID(), vehicle_id: truck.AZ036, service_date: ymd(-20), mileage: 1000, category: "oil_change",
+        description: "Oil and filter", next_due_date: ymd(-2) } });
+      assert.equal(oil.statusCode, 201, oil.body);
+      assert.equal((await inject("POST", "/admin/equipment", { cookie: adminCookie, body: { tag: "HT-01", type: "hedge_trimmer" } })).statusCode, 201);
+
+      const r = (await inject("GET", "/reminders", { cookie: shopCookie })).json();
+      const find = (re: RegExp) => r.items.find((i: { title: string }) => re.test(i.title));
+      assert.equal(find(/^AZ048: registration expired/)?.state, "due");
+      assert.equal(find(/^AZ039: registration expires/)?.state, "soon");
+      assert.equal(find(/^AZ036: Oil change due by/)?.state, "due");
+      const insp = find(/^\d+ trucks not inspected in 35 days$/);
+      assert.ok(insp, "overdue inspections are one line");
+      assert.match(insp.detail, /^AZ\d{3}(, AZ\d{3})*( and \d+ more)?$/, "the truck numbers, the first 12 and how many more");
+      assert.equal(r.items.filter((i: { kind: string }) => i.kind === "inspection").length, 1);
+      assert.match(find(/Not on a trailer: \d+ pieces? due for a check/)?.detail ?? "", /HT-01/);
+      assert.equal(r.due, r.items.filter((i: { state: string }) => i.state === "due").length);
+      assert.equal(r.items[r.items.length - 1].state === "soon" || r.soon === 0, true, "due ones come first");
+    });
+  });
 }

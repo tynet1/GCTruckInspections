@@ -7,7 +7,7 @@ import { UNATTACHED } from "../photo-owners.ts";
 
 const VEHICLE_COLS = `
   vs.id, vs.truck_code, vs.unit, vs.vin, vs.plate, vs.year, vs.make, vs.model,
-  vs.registration_expires, vs.registration_expired, vs.pulls_trailer,
+  vs.registration_expires, vs.registration_expired, vs.pulls_trailer, vs.status,
   vs.last_inspection_id, vs.last_inspection_date, vs.last_status, vs.last_mileage, vs.open_repairs,
   d.id AS diagram_id, d.file_path AS diagram_path,
   td.id AS trailer_diagram_id, td.file_path AS trailer_path, td.name AS trailer_type`;
@@ -333,7 +333,9 @@ export default async function vehicleRoutes(app: FastifyInstance) {
     );
     const damage = await damageHistory(id, vehicle);
     const registration = await registrationHistory(id);
-    return { vehicle, openRepairs, history, archived_count: archived?.n ?? 0, damage, registration };
+    // The trailer on this truck now (015), if any; the inspection form fills in its number.
+    const trailer = await one(`SELECT id, trailer_number, name, plate FROM trailers WHERE vehicle_id = $1 AND active`, [id]);
+    return { vehicle: { ...vehicle, trailer: trailer ?? null }, openRepairs, history, archived_count: archived?.n ?? 0, damage, registration };
   });
 
   // Previous inspection prefills the notes; all damage on file shows as grey dots on the new form.

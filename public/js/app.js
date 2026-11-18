@@ -19,6 +19,7 @@ import * as csvView from "./views/csv.js";
 import * as exportView from "./views/export.js";
 import * as form from "./views/form.js";
 import * as repairsBoard from "./views/repairs.js";
+import * as reminders from "./views/reminders.js";
 import * as home from "./views/home.js";
 import * as serviceDetail from "./views/service-detail.js";
 import * as serviceForm from "./views/service-form.js";
@@ -38,6 +39,7 @@ const routes = [
   { re: /^#\/export(?:\?truck=(\d+))?$/, view: exportView, role: "supervisor" },
   { re: /^#\/csv(?:\?([\w=&-]*))?$/, view: csvView, allow: () => can.seeService() },
   { re: /^#\/repairs(?:\?truck=(\d+))?$/, view: repairsBoard, allow: () => can.seeService() },
+  { re: /^#\/reminders$/, view: reminders, allow: () => can.seeService() },
   { re: /^#\/yard(?:\/(\d+))?$/, view: yard, allow: () => can.seeService() },
   { re: /^#\/yard\/(\d+)\/walk$/, view: yardForm, role: "supervisor" },
   { re: /^#\/yard-walk\/([0-9a-f-]{36})$/i, view: yardDetail, allow: () => can.seeService() },
@@ -118,6 +120,7 @@ export function openMenu() {
   const u = state.user;
   const m = modal(`<h3>${esc(u.name)}</h3><p class="muted small" style="margin-top:-8px">Signed in as ${esc(u.role)}</p>
     <div style="display:grid;gap:10px">
+      ${can.seeService() ? `<a class="secondary" href="#/reminders" data-close>Reminders</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/repairs" data-close>Repairs board</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/yard" data-close>Yard walks</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/equipment" data-close>Equipment checks</a>` : ""}

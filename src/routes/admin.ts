@@ -173,6 +173,9 @@ export default async function adminRoutes(app: FastifyInstance) {
             [id, v.registration_expires, f.registration_expires, req.user!.id],
           );
         }
+        // Switching a truck off or on changes its status (015); the database records who did it.
+        await c.query(`SELECT set_config('gc.user_id', $1, true), set_config('gc.note', $2, true)`,
+          [String(req.user!.id), f.active === undefined ? "" : "Admin → Trucks"]);
         await c.query(
           `UPDATE vehicles SET ${cols.map((c, i) => `${c} = $${i + 2}`).join(", ")}, updated_at = now() WHERE id = $1`,
           [id, ...Object.values(f)],

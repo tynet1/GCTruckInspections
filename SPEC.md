@@ -142,6 +142,8 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
   used by every photo check and the clean-up, so a new kind of record can't leave its photos unprotected.
 - Equipment maintenance entries (014) can only be voided (with a reason), never edited or deleted; voiding reopens the
   problems the entry closed.
+- Truck status changes (015) are recorded by the database itself for every change, however it's made, and the history
+  can't be edited or deleted. Trailer moves are kept with the other asset changes.
 
 ## 5. Business rules
 
@@ -264,6 +266,14 @@ POST /equipment-service {client_id, equipment_id, service_date, work:[{type, nex
      performed_by, vendor, notes, fix_item_ids, photos} -> {id, fixed} (200 + duplicate on a retry)   shop, admin
 GET  /equipment-service/:id; POST /equipment-service/:id/void {reason}                          read: supervisor, shop, admin; void: shop, admin
 
+Fleet (built), supervisor, shop, admin:
+GET  /fleet-config                   -> {statuses, shop_statuses}
+POST /vehicles/:id/status {status, note}     (the shop: in_service, in_shop, on_hold, trucks in the fleet only)
+GET  /vehicles/:id/status-history
+GET  /trailers; POST /trailers/:id/assign {vehicle_id | null}
+GET  /reminders                      -> {due, soon, items: [{kind, state, title, detail, link}]}
+GET  /vehicles/:id now includes vehicle.status and vehicle.trailer.
+
 Maintenance log (built):
 GET  /service-config                -> {categories}                          shop, supervisor, admin
 GET  /vehicles/:id/service          -> {entries, next_due, current_mileage}  shop, supervisor, admin
@@ -330,7 +340,21 @@ POST /service-logs/:id/void         {reason}                                    
        deleting: they leave the open-repairs lists and "Damage on file" while it's archived, and come back if it's
        un-archived. So nothing drops out of sight by accident, the Archive confirmation names what will come off (e.g.
        "2 open repairs and 1 damage mark will come off AZ018's page").
-   - **Fleet management:** add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
+   - **Fleet management, first part (built 2026-11-18, migration 015):**
+     - **Status** on the truck page (Change): In service, In the shop, On hold, Preparing for return, Returned, Sold, and
+       Retired (added for trucks taken out for any other reason, and those already switched off in Admin). The shop sets
+       In service / In the shop / On hold on trucks in the fleet; supervisors and admins set any. Returned, Sold and
+       Retired take the truck out of the fleet (crews no longer see it); Admin → Trucks' Active switch stays in step.
+       Every change, from anywhere, is recorded by the database with who, when and an optional note (Status history on
+       the truck page). Home screen truck cards show any status other than In service.
+     - **Trailers on trucks:** the truck page's Trailer row (Change) puts a trailer on the truck; a truck pulls one
+       trailer, so one already there comes off, and a trailer moves off its old truck. Moves are kept. The inspection
+       form fills in the trailer on the truck; the equipment page shows which truck each trailer is on.
+     - **Reminders** (Menu → Reminders, and a card on the home screen; supervisors, shop, admin): registrations expired or
+       within 30 days, truck maintenance due or within two weeks (date or 500 miles), equipment due for a check, equipment
+       maintenance due, the yard walk not done today, and trucks not inspected in 35 days (one line, with the numbers).
+     - **Still to come:** lease details and the lease-return checklist (when Tyler has them), insurance dates, phone push.
+     Original plan: add trucks, retire/remove them (kept in history), track lease details and **prepare for lease return**,
      and the rest of the truck's lifecycle. Tyler's answers (2026-11-17):
      - **Status:** in service, in the shop, **on hold** (Tyler added it), preparing for return, returned, sold. Shop,
        supervisors and admins can change it; every change is kept with who and when.
@@ -450,7 +474,8 @@ POST /service-logs/:id/void         {reason}                                    
      on a sample form.
 6. **Build order (Tyler left it to Claude, 2026-11-17):** PDF repair ticket (built) → checklist editor (built) → yard
    inspections (built) → equipment checks (built) → maintenance log for equipment (built) → fleet management (status,
-   trailers on trucks, supervisor reminders; lease details when Tyler has them) → incident reports once a sample form arrives.
+   trailers on trucks, supervisor reminders: built; lease details when Tyler has them) → incident reports once a sample
+   form arrives.
    Phase 3 (code review, burn-in) after those.
 
 ## 10. Acceptance checklist for MVP

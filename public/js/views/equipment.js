@@ -58,7 +58,7 @@ export async function render(app, pieceId) {
   const draftFor = (key) => drafts.find((d) => d.key === `equip-${key}`);
 
   const groups = [
-    ...data.trailers.map((t) => ({ key: String(t.id), title: t.trailer_number, sub: t.name, pieces: t.pieces })),
+    ...data.trailers.map((t) => ({ key: String(t.id), title: t.trailer_number, sub: [t.name, t.truck_code ? `on ${t.truck_code}` : ""].filter(Boolean).join(" · "), pieces: t.pieces })),
     ...(data.unassigned.length ? [{ key: "none", title: "Not on a trailer", sub: "", pieces: data.unassigned }] : []),
   ];
   let h = `<p class="small muted" style="margin:14px 4px 0">Each piece is due for a check every ${data.check_days} days.

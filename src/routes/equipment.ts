@@ -234,7 +234,7 @@ export async function submitCheck(input: CheckSubmit, userId: number) {
 // ---------- Reading ----------
 
 /** Active pieces with when each was last checked, whether it's due, and its open problems. */
-async function pieces(where = "", params: unknown[] = []) {
+export async function pieces(where = "", params: unknown[] = []) {
   const days = await checkDays();
   const rows = await q(
     `SELECT e.id, e.tag, e.type, e.make, e.model, e.serial, e.trailer_id, e.notes,
@@ -439,7 +439,9 @@ export default async function equipmentRoutes(app: FastifyInstance) {
   // Every trailer in use with its pieces (and the pieces on no trailer), each with its last check and whether it's due.
   app.get("/equipment", crewOfShop, async () => {
     const all = await pieces();
-    const trailers = await q(`SELECT id, trailer_number, name, plate FROM trailers WHERE active ORDER BY lower(trailer_number)`);
+    const trailers = await q(
+      `SELECT t.id, t.trailer_number, t.name, t.plate, v.truck_code FROM trailers t LEFT JOIN vehicles v ON v.id = t.vehicle_id
+        WHERE t.active ORDER BY lower(t.trailer_number)`);
     return {
       check_days: await checkDays(),
       trailers: trailers.map((t) => ({ ...t, pieces: all.filter((p) => p.trailer_id === t.id) })),
