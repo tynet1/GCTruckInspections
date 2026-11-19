@@ -10,6 +10,7 @@ import { one, q, tx } from "../db.ts";
 import { bad, conflict, DATE_RE, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE, uuidParam } from "../http.ts";
 import { attachFailed, UNATTACHED } from "../photo-owners.ts";
 import { EQUIPMENT_SECTIONS, EQUIPMENT_TYPES } from "./checklist.ts";
+import { trashInfo } from "./trash.ts";
 
 const TYPE_KEYS: string[] = EQUIPMENT_TYPES.map((t) => t.key);
 const SECTION_ORDER = EQUIPMENT_SECTIONS.map((s) => s.key);
@@ -238,9 +239,10 @@ export async function pieces(where = "", params: unknown[] = []) {
   const days = await checkDays();
   const rows = await q(
     `SELECT e.id, e.tag, e.type, e.make, e.model, e.serial, e.trailer_id, e.notes,
-            (SELECT max(c.check_date) FROM equipment_check_pieces p JOIN equipment_checks c ON c.id = p.check_id
+            (SELECT max(c.check_date) FROM equipment_check_pieces p JOIN live_equipment_checks c ON c.id = p.check_id
               WHERE p.equipment_id = e.id AND p.status = 'checked') AS last_checked,
-            (SELECT count(*) FROM equipment_check_items i WHERE i.equipment_id = e.id AND i.result = 'repair' AND i.resolved_at IS NULL)::int AS open_problems,
+            (SELECT count(*) FROM equipment_check_items i JOIN live_equipment_checks c ON c.id = i.check_id
+              WHERE i.equipment_id = e.id AND i.result = 'repair' AND i.resolved_at IS NULL)::int AS open_problems,
             -- Maintenance whose next-due date has passed (newest live entry per type of work, migration 014).
             (SELECT count(*) FROM (
                SELECT DISTINCT ON (w->>'type') (w->>'next_due_date')::date AS d
@@ -465,7 +467,7 @@ export default async function equipmentRoutes(app: FastifyInstance) {
     const checks = await q(
       `SELECT c.id, c.check_date, c.checker_name, p.status, p.note,
               (SELECT count(*) FROM equipment_check_items i WHERE i.piece_id = p.id AND i.result = 'repair')::int AS problems
-         FROM equipment_check_pieces p JOIN equipment_checks c ON c.id = p.check_id
+         FROM equipment_check_pieces p JOIN live_equipment_checks c ON c.id = p.check_id
         WHERE p.equipment_id = $1 ORDER BY c.check_date DESC, c.created_at DESC LIMIT 100`,
       [id]);
     const trailers = new Map((await q(`SELECT id, trailer_number FROM trailers`)).map((t) => [t.id, t.trailer_number]));
@@ -528,7 +530,7 @@ export default async function equipmentRoutes(app: FastifyInstance) {
               (SELECT count(*) FROM equipment_check_pieces p WHERE p.check_id = c.id AND p.status = 'not_here')::int AS not_here,
               (SELECT count(*) FROM equipment_check_items i WHERE i.check_id = c.id AND i.result = 'repair')::int AS problems,
               (SELECT count(*) FROM equipment_check_items i WHERE i.check_id = c.id AND i.result = 'repair' AND i.resolved_at IS NULL)::int AS open
-         FROM equipment_checks c LEFT JOIN trailers t ON t.id = c.trailer_id
+         FROM live_equipment_checks c LEFT JOIN trailers t ON t.id = c.trailer_id
          ${where} ORDER BY c.check_date DESC, c.created_at DESC LIMIT $${params.length}`,
       params,
     );
@@ -537,7 +539,7 @@ export default async function equipmentRoutes(app: FastifyInstance) {
   app.get("/equipment-checks/:id", crewOfShop, async (req) => {
     const d = await loadCheck(uuidParam(req.params));
     if (!d) throw notFound("Equipment check not found.");
-    return d;
+    return { ...d, trash: await trashInfo("equipment_check", d.check.id) };
   });
 
   // Open problems on equipment in use, oldest first (repairs board, home screen).
@@ -548,7 +550,7 @@ export default async function equipmentRoutes(app: FastifyInstance) {
               (current_date - c.check_date) AS days_open,
               ARRAY(SELECT ph.id FROM photos ph WHERE ph.equipment_check_item_id = i.id ORDER BY ph.created_at, ph.id) AS photo_ids
          FROM equipment_check_items i
-         JOIN equipment_checks c ON c.id = i.check_id
+         JOIN live_equipment_checks c ON c.id = i.check_id
          JOIN equipment e ON e.id = i.equipment_id
          LEFT JOIN trailers t ON t.id = e.trailer_id
         WHERE i.result = 'repair' AND i.resolved_at IS NULL AND e.active
@@ -559,10 +561,11 @@ export default async function equipmentRoutes(app: FastifyInstance) {
     const note = reqStr(obj(req.body ?? {}).note, "Resolution note", 1000);
     const r = await one(
       `UPDATE equipment_check_items SET resolved_at = now(), resolved_by = $2, resolution_note = $3
-        WHERE id = $1 AND result = 'repair' AND resolved_at IS NULL RETURNING id`,
+        WHERE id = $1 AND result = 'repair' AND resolved_at IS NULL
+          AND check_id IN (SELECT id FROM live_equipment_checks) RETURNING id`,
       [idParam(req.params), req.user!.id, note],
     );
-    if (!r) throw conflict("That problem is already resolved or isn't a problem.");
+    if (!r) throw conflict("That problem is already resolved, isn't a problem, or its check is in the trash.");
     return { ok: true };
   });
 }

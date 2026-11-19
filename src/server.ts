@@ -27,6 +27,7 @@ import brandingRoutes from "./routes/branding.ts";
 import inspectionRoutes from "./routes/inspections.ts";
 import photoRoutes, { cleanupOrphanPhotos } from "./routes/photos.ts";
 import serviceRoutes from "./routes/service.ts";
+import trashRoutes from "./routes/trash.ts";
 import vehicleRoutes from "./routes/vehicles.ts";
 import { ensureAdmin, seedVehicles } from "./seed.ts";
 
@@ -130,6 +131,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
       await api.register(equipmentServiceRoutes);
       await api.register(fleetRoutes);
       await api.register(incidentRoutes);
+      await api.register(trashRoutes);
       api.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 404, message: "Not found." }));
     },
     { prefix: "/api" },

@@ -7,6 +7,7 @@ import { requireRole } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { bad, conflict, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE } from "../http.ts";
 import { attachFailed, isUnattached, OWNER_COLUMNS, UNATTACHED } from "../photo-owners.ts";
+import { trashInfo } from "./trash.ts";
 
 export const CATEGORIES: Record<string, string> = {
   oil_change: "Oil change",
@@ -441,6 +442,33 @@ const withLabel = <T extends Record<string, unknown>>(r: T) => ({ ...r, category
 
 class DuplicateSave extends Error {}
 
+/**
+ * Void an entry, inside the caller's transaction: repairs it closed are reopened and damage it fixed goes back on file.
+ * False when it was already voided (or doesn't exist).
+ */
+export async function voidServiceLog(c: PoolClient, id: number, userId: number, reason: string): Promise<boolean> {
+  const r = await c.query(
+    `UPDATE service_logs SET voided_at = now(), voided_by = $2, void_reason = $3, updated_by = $2
+      WHERE id = $1 AND voided_at IS NULL RETURNING id`,
+    [id, userId, reason],
+  );
+  if (!r.rowCount) return false;
+  await c.query(
+    `UPDATE inspection_items ii SET resolved_at = NULL, resolved_by = NULL, resolution_note = NULL
+       FROM service_log_repairs r
+      WHERE r.service_log_id = $1 AND r.active AND r.resolved_here AND ii.id = r.inspection_item_id`,
+    [id],
+  );
+  await c.query(`UPDATE service_log_repairs SET active = false WHERE service_log_id = $1`, [id]);
+  // Damage it marked repaired goes back on file.
+  await c.query(
+    `UPDATE damage_repairs SET active = false, ended_at = now(), ended_by = $2, end_reason = $3
+      WHERE service_log_id = $1 AND active`,
+    [id, userId, `Maintenance entry voided: ${reason}`.slice(0, 600)],
+  );
+  return true;
+}
+
 export default async function serviceRoutes(app: FastifyInstance) {
   app.get("/service-config", canRead, async () => ({
     categories: Object.entries(CATEGORIES).map(([id, label]) => ({ id, label, auto: AUTO_TICK[id] ?? null })),
@@ -452,7 +480,8 @@ export default async function serviceRoutes(app: FastifyInstance) {
     if (!(await one(`SELECT 1 FROM vehicles WHERE id = $1`, [vid]))) throw notFound("Truck not found.");
     const entries = await q(
       `SELECT ${LIST_COLS} FROM service_logs s JOIN vehicles v ON v.id = s.vehicle_id
-        WHERE s.vehicle_id = $1 ORDER BY s.service_date DESC, s.id DESC LIMIT 500`,
+        WHERE s.vehicle_id = $1 AND NOT EXISTS (SELECT 1 FROM trash tr WHERE tr.kind = 'service_log' AND tr.record_id = s.id::text)
+        ORDER BY s.service_date DESC, s.id DESC LIMIT 500`,
       [vid],
     );
     const current = await one<{ miles: number | null }>(
@@ -504,7 +533,10 @@ export default async function serviceRoutes(app: FastifyInstance) {
     return rows.map(withLabel);
   });
 
-  app.get("/service-logs/:id", canRead, async (req) => loadEntry(idParam(req.params)));
+  app.get("/service-logs/:id", canRead, async (req) => {
+    const id = idParam(req.params);
+    return { ...(await loadEntry(id)), trash: await trashInfo("service_log", id) };
+  });
 
   // New entry. Idempotent on client_id, like inspections, so a retried save never makes a duplicate.
   app.post("/service-logs", canWrite, async (req, reply) => {
@@ -587,33 +619,14 @@ export default async function serviceRoutes(app: FastifyInstance) {
 
   // Void (never delete). Repairs this entry closed are reopened, and damage it fixed goes back on file.
   app.post("/service-logs/:id/void", canWrite, async (req) => {
-    const user = req.user!;
     const id = idParam(req.params);
     const reason = reqStr(obj(req.body ?? {}).reason, "Reason", 500);
     await tx(async (c) => {
-      const r = await c.query(
-        `UPDATE service_logs SET voided_at = now(), voided_by = $2, void_reason = $3, updated_by = $2
-          WHERE id = $1 AND voided_at IS NULL RETURNING id`,
-        [id, user.id, reason],
-      );
-      if (!r.rowCount) {
+      if (!(await voidServiceLog(c, id, req.user!.id, reason))) {
         const exists = await c.query(`SELECT 1 FROM service_logs WHERE id = $1`, [id]);
         if (!exists.rowCount) throw notFound("Maintenance entry not found.");
         throw conflict("This entry was already voided.");
       }
-      await c.query(
-        `UPDATE inspection_items ii SET resolved_at = NULL, resolved_by = NULL, resolution_note = NULL
-           FROM service_log_repairs r
-          WHERE r.service_log_id = $1 AND r.active AND r.resolved_here AND ii.id = r.inspection_item_id`,
-        [id],
-      );
-      await c.query(`UPDATE service_log_repairs SET active = false WHERE service_log_id = $1`, [id]);
-      // Damage it marked repaired goes back on file.
-      await c.query(
-        `UPDATE damage_repairs SET active = false, ended_at = now(), ended_by = $2, end_reason = $3
-          WHERE service_log_id = $1 AND active`,
-        [id, user.id, `Maintenance entry voided: ${reason}`.slice(0, 600)],
-      );
     });
     return loadEntry(id);
   });

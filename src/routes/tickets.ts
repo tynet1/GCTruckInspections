@@ -3,11 +3,13 @@
 // Fixing the repairs still goes through a maintenance entry (or a supervisor's Resolve), and the ticket shows it.
 // A ticket can also hold damage from an incident report (019), only when someone ticked it: it's never picked for them.
 import type { FastifyInstance } from "fastify";
+import type { PoolClient } from "pg";
 import { requireRole } from "../auth.ts";
-import { one, q, tx } from "../db.ts";
+import { one, pool, q, tx } from "../db.ts";
 import { bad, conflict, HttpError, idParam, int, notFound, obj, reqStr, str, UUID_RE } from "../http.ts";
 import { renderHtmlToPdf } from "../pdf.ts";
 import { ticketPdfHtml } from "../ticket-pdf.ts";
+import { trashInfo } from "./trash.ts";
 
 export const ticketNumber = (id: number) => `RT-${String(id).padStart(4, "0")}`;
 const MAX_ITEMS = 50;
@@ -113,6 +115,15 @@ const forClient = (t: Ticket) => ({
   items: t.items.map(({ photos, ...it }) => ({ ...it, photo_ids: photos.map((p) => p.id) })),
 });
 
+/** Void a ticket inside the caller's transaction. False when it was already voided (or doesn't exist). */
+export async function voidTicket(c: Pick<PoolClient, "query">, id: number, userId: number, reason: string): Promise<boolean> {
+  const r = await c.query(
+    `UPDATE repair_tickets SET voided_at = now(), voided_by = $2, void_reason = $3 WHERE id = $1 AND voided_at IS NULL RETURNING id`,
+    [id, userId, reason],
+  );
+  return !!r.rowCount;
+}
+
 export default async function ticketRoutes(app: FastifyInstance) {
   const allowed = { preHandler: requireRole("supervisor", "shop") };
 
@@ -190,7 +201,7 @@ export default async function ticketRoutes(app: FastifyInstance) {
   app.get("/repair-tickets/:id", allowed, async (req) => {
     const t = await loadTicket(idParam(req.params));
     if (!t) throw notFound("Ticket not found.");
-    return forClient(t);
+    return { ...forClient(t), trash: await trashInfo("repair_ticket", t.id) };
   });
 
   // A truck's tickets, newest first, with how many of their repairs are fixed.
@@ -208,7 +219,7 @@ export default async function ticketRoutes(app: FastifyInstance) {
            SELECT count(*) AS n,
                   count(*) FILTER (WHERE EXISTS (SELECT 1 FROM damage_repairs dr WHERE dr.damage_mark_id = td.damage_mark_id AND dr.active)) AS fixed
              FROM repair_ticket_damage td WHERE td.ticket_id = t.id) d
-        WHERE t.vehicle_id = $1
+        WHERE t.vehicle_id = $1 AND NOT EXISTS (SELECT 1 FROM trash tr WHERE tr.kind = 'repair_ticket' AND tr.record_id = t.id::text)
         ORDER BY t.created_at DESC, t.id DESC LIMIT 200`,
       [idParam(req.params)],
     )).map((t) => ({ ...t, number: ticketNumber(t.id) })));
@@ -223,12 +234,7 @@ export default async function ticketRoutes(app: FastifyInstance) {
   app.post("/repair-tickets/:id/void", allowed, async (req) => {
     const id = idParam(req.params);
     const reason = reqStr(obj(req.body ?? {}).reason, "Reason", 600);
-    const r = await one(
-      `UPDATE repair_tickets SET voided_at = now(), voided_by = $2, void_reason = $3
-        WHERE id = $1 AND voided_at IS NULL RETURNING id`,
-      [id, req.user!.id, reason],
-    );
-    if (!r) {
+    if (!(await voidTicket(pool, id, req.user!.id, reason))) {
       if (!(await one(`SELECT 1 FROM repair_tickets WHERE id = $1`, [id]))) throw notFound("Ticket not found.");
       throw conflict("That ticket is already voided.");
     }

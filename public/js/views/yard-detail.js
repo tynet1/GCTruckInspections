@@ -2,7 +2,7 @@
 import { api } from "../api.js";
 import { atLeast, errorHtml, setHeader, stale, state } from "../ui.js";
 import { esc, fmtDate, lightbox } from "../util.js";
-import { resolveRepair } from "./common.js";
+import { askTrash, resolveRepair, trashBanner, trashCard } from "./common.js";
 
 const SECTIONS = [["fire", "Fire safety"], ["fuel", "Fuel, oil & chemicals"], ["equipment", "Equipment & charging"], ["access", "Access & security"]];
 
@@ -24,7 +24,8 @@ export async function render(app, id) {
   const photoBox = (list) => list.length ? `<div class="row" style="margin-top:6px">${list.map((p) =>
     `<img class="dmgthumb" src="/api/photos/${esc(p.id)}" data-lb="${esc(p.id)}" data-cap="${esc(p.caption || "")}" alt="Photo">`).join("")}</div>` : "";
 
-  let h = `<div class="card" style="margin-top:14px"><dl class="kv">
+  const live = !data.trash;
+  let h = `${trashBanner(data.trash)}<div class="card" style="margin-top:14px"><dl class="kv">
       <dt>Yard</dt><dd>${esc(w.yard_name)}</dd><dt>Date</dt><dd>${fmtDate(w.inspection_date)}</dd>
       <dt>Inspector</dt><dd>${esc(w.inspector_name)}</dd>
       <dt>Problems</dt><dd>${problems.length ? `${problems.length} (${problems.filter((p) => !p.resolved_at).length} open)` : "None ✓"}</dd></dl>
@@ -35,7 +36,7 @@ export async function render(app, id) {
         ${p.note ? `<div>${esc(p.note)}</div>` : ""}
         ${p.resolved_at ? `<div class="small muted">${esc(p.resolved_by_name || "")}: ${esc(p.resolution_note || "")}</div>` : ""}
         ${photoBox(photos.filter((ph) => ph.item_id === p.id))}</div>
-        ${!p.resolved_at && atLeast("supervisor") ? `<div class="btncol"><button class="secondary" data-yresolve="${p.id}" data-label="${esc(p.label)}">Resolve</button></div>` : ""}
+        ${!p.resolved_at && live && atLeast("supervisor") ? `<div class="btncol"><button class="secondary" data-yresolve="${p.id}" data-label="${esc(p.label)}">Resolve</button></div>` : ""}
       </div></li>`).join("")}</ul></div>`;
   }
   h += `<h2>Checklist</h2>${SECTIONS.map(([key, title]) => {
@@ -47,9 +48,14 @@ export async function render(app, id) {
   const general = photos.filter((p) => !p.item_id);
   if (general.length) h += `<h2>Photos</h2><div class="card">${photoBox(general)}</div>`;
   if (w.comments) h += `<h2>Comments</h2><div class="card" style="white-space:pre-wrap">${esc(w.comments)}</div>`;
-  h += `<h2>Signature</h2><div class="card"><img src="/api/yard-inspections/${esc(w.id)}/signature" alt="Signature" style="max-width:100%;height:80px;object-fit:contain">
+  h += `<h2>Signature</h2><div class="card"><img class="sigpic" src="/api/yard-inspections/${esc(w.id)}/signature" alt="Signature">
     <div class="small muted">${esc(w.inspector_name)}</div></div>`;
+  const trashNote = "Its open problems come off the board. ";
+  if (live && atLeast("admin")) h += trashCard("yard walk", trashNote);
   app.innerHTML = h;
+  app.querySelector("[data-trash]")?.addEventListener("click", async () => {
+    if (await askTrash("yard_walk", w.id, "yard walk", trashNote) && !stale(nav)) location.hash = `#/yard/${w.yard_id}`;
+  });
 
   app.querySelectorAll("[data-lb]").forEach((img) => (img.onclick = () => lightbox(img.src, img.dataset.cap)));
   app.querySelectorAll("[data-yresolve]").forEach((b) => (b.onclick = async () => {

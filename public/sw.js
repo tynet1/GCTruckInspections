@@ -26,6 +26,7 @@ const SHELL_FILES = [
   "/js/idb.js",
   "/js/incq.js",
   "/js/sig.js",
+  "/js/theme.js",
   "/js/svc.js",
   "/js/ui.js",
   "/js/util.js",

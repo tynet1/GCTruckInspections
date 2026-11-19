@@ -2,9 +2,9 @@
 // or an outside vendor; see a truck's tickets; share, save or print a ticket's PDF; log its fix; void a mistaken one.
 // Making or voiding a ticket needs signal (like a registration update): it isn't queued on the phone.
 import { api, apiFile } from "../api.js";
-import { can } from "../ui.js";
+import { atLeast, can } from "../ui.js";
 import { esc, fmtDate, modal, saveBlob, toast, uuid } from "../util.js";
-import { SECTION_TITLES } from "./common.js";
+import { askTrash, SECTION_TITLES } from "./common.js";
 
 export const ticketNumber = (id) => `RT-${String(id).padStart(4, "0")}`;
 const noSignal = "No signal, so nothing was saved. Try again when you have signal.";
@@ -127,12 +127,17 @@ export async function openTicket(id) {
       <div style="display:grid;gap:10px;margin-top:10px">
         ${!t.voided && open.length && can.logService() ? `<a class="secondary" href="#/service/new/${t.vehicle_id}?ticket=${t.id}" data-close>Log fix (${open.length} open)</a>` : ""}
         ${t.voided ? "" : `<button class="secondary danger" id="tk-void">Void this ticket</button>`}
+        ${atLeast("admin") && !t.trash ? `<button class="secondary danger" id="tk-trash">Delete this ticket</button>` : ""}
         <button class="secondary" data-close>Close</button>
       </div>`);
     const close = (changed) => { m.remove(); resolve(changed); };
     m.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => close(false)));
     const v = m.querySelector("#tk-void");
     if (v) v.onclick = async () => { if (await voidTicket(t)) close(true); };
+    const del = m.querySelector("#tk-trash");
+    if (del) del.onclick = async () => {
+      if (await askTrash("repair_ticket", t.id, "ticket", t.voided ? "" : "It's voided first. ")) close(true);
+    };
     pdfButtons(m.querySelector("#tk-pdf"), t);
   });
 }

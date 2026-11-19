@@ -298,7 +298,7 @@ const TRANSITIONS: Record<StateAction, { from: IncidentState[]; to: IncidentStat
 const ALREADY: Record<IncidentState, string> = {
   active: "This report isn't archived or deleted.",
   archived: "This report is already archived.",
-  deleted: "This report is deleted. Restore it first (Admin → Deleted).",
+  deleted: "This report is deleted. Restore it first (Admin → Trash).",
 };
 
 /** Archive, un-archive, delete or restore a report. The report never changes; the state row and its history do. */

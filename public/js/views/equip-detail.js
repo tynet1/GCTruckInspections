@@ -1,9 +1,9 @@
 // One equipment check: who and when, each piece (checked or not here) with its problems first (with Resolve), then
 // everything else it was checked on.
 import { api } from "../api.js";
-import { errorHtml, setHeader, stale, state } from "../ui.js";
+import { atLeast, errorHtml, setHeader, stale, state } from "../ui.js";
 import { esc, fmtDate, lightbox } from "../util.js";
-import { resolveRepair } from "./common.js";
+import { askTrash, resolveRepair, trashBanner, trashCard } from "./common.js";
 
 export async function render(app, id) {
   const nav = state.nav;
@@ -24,7 +24,8 @@ export async function render(app, id) {
   const photoBox = (list) => list.length ? `<div class="row" style="margin-top:6px">${list.map((ph) =>
     `<img class="dmgthumb" src="/api/photos/${esc(ph.id)}" data-lb="${esc(ph.id)}" data-cap="${esc(ph.caption || "")}" alt="Photo">`).join("")}</div>` : "";
 
-  let h = `<div class="card" style="margin-top:14px"><dl class="kv">
+  const live = !data.trash;
+  let h = `${trashBanner(data.trash)}<div class="card" style="margin-top:14px"><dl class="kv">
       <dt>Trailer</dt><dd>${esc(where)}</dd><dt>Date</dt><dd>${fmtDate(c.check_date)}</dd><dt>Checked by</dt><dd>${esc(c.checker_name)}</dd>
       <dt>Pieces</dt><dd>${pieces.filter((p) => p.status === "checked").length} checked${pieces.some((p) => p.status === "not_here")
         ? `, ${pieces.filter((p) => p.status === "not_here").length} not here` : ""}</dd>
@@ -43,14 +44,19 @@ export async function render(app, id) {
             ${i.note ? `<div>${esc(i.note)}</div>` : ""}
             ${i.resolved_at ? `<div class="small muted">${esc(i.resolved_by_name || "")}: ${esc(i.resolution_note || "")}</div>` : ""}
             ${photoBox(photos.filter((ph) => ph.item_id === i.id))}</div>
-            ${i.resolved_at ? "" : `<div class="btncol"><button class="secondary" data-eresolve="${i.id}" data-label="${esc(`${p.tag}: ${i.label}`)}">Resolve</button></div>`}
+            ${i.resolved_at || !live ? "" : `<div class="btncol"><button class="secondary" data-eresolve="${i.id}" data-label="${esc(`${p.tag}: ${i.label}`)}">Resolve</button></div>`}
           </div></li>`).join("")}</ul>`;
       }
       h += `<div class="small muted" style="margin-top:${bad.length ? "8px" : "0"}">${bad.length ? "Also checked OK: " : "All OK: "}${ok.map((i) => esc(i.label)).join(" · ")}</div>`;
     }
     h += `</div>`;
   }
+  const trashNote = "Its open problems come off the board, and it no longer counts as the pieces' last check. ";
+  if (live && atLeast("admin")) h += trashCard("equipment check", trashNote);
   app.innerHTML = h;
+  app.querySelector("[data-trash]")?.addEventListener("click", async () => {
+    if (await askTrash("equipment_check", c.id, "equipment check", trashNote) && !stale(nav)) location.hash = "#/equipment";
+  });
   app.querySelectorAll("[data-lb]").forEach((img) => (img.onclick = () => lightbox(img.src, img.dataset.cap)));
   app.querySelectorAll("[data-eresolve]").forEach((b) => (b.onclick = async () => {
     if (await resolveRepair(b.dataset.eresolve, b.dataset.label, `/equipment-findings/${b.dataset.eresolve}/resolve`) && !stale(nav)) render(app, id);

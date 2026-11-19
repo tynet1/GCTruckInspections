@@ -293,7 +293,7 @@ const TRANSITIONS: Record<StateAction, { from: InspectionState[]; to: Inspection
 const ALREADY: Record<InspectionState, string> = {
   active: "This inspection isn't archived or deleted.",
   archived: "This inspection is already archived.",
-  deleted: "This inspection is deleted. Restore it first (Admin → Deleted).",
+  deleted: "This inspection is deleted. Restore it first (Admin → Trash).",
 };
 
 /**
@@ -425,7 +425,7 @@ export default async function inspectionRoutes(app: FastifyInstance) {
       where.push(`i.inspection_date ${op} $${params.length}::date`);
     }
     // Archived and deleted inspections are left out unless asked for: archived=only (just archived ones) or
-    // archived=include (live and archived). Deleted ones are only listed under Admin → Deleted.
+    // archived=include (live and archived). Deleted ones are only listed under Admin → Trash.
     const st = "COALESCE(st.state, 'active')";
     if (qs.archived === "only") where.push(`${st} = 'archived'`);
     else if (qs.archived === "include") where.push(`${st} IN ('active', 'archived')`);
@@ -550,7 +550,7 @@ export default async function inspectionRoutes(app: FastifyInstance) {
   app.post("/inspections/:id/restore", { preHandler: requireRole("admin") }, async (req) =>
     changeInspectionState(uuidParam(req.params), "restore", req.user!.id, null));
 
-  // Admin → Deleted: everything deleted, newest first, ready to restore.
+  // Deleted inspections (older copies of the app's Admin → Deleted tab; Admin → Trash lists everything now).
   app.get("/admin/deleted-inspections", { preHandler: requireRole("admin") }, async () =>
     q(`SELECT i.id, i.vehicle_id, v.truck_code, i.inspection_date, i.inspector_name, i.mileage, i.status,
               s.reason, s.changed_at AS deleted_at, u.name AS deleted_by_name

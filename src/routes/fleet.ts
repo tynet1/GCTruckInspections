@@ -45,6 +45,9 @@ export default async function fleetRoutes(app: FastifyInstance) {
     return tx(async (c) => {
       const v = (await c.query(`SELECT status, active FROM vehicles WHERE id = $1 FOR UPDATE`, [id])).rows[0];
       if (!v) throw notFound("Truck not found.");
+      if ((await c.query(`SELECT 1 FROM trash WHERE kind = 'vehicle' AND record_id = $1::text`, [id])).rowCount) {
+        throw conflict("This truck is in the trash. Restore it first (Admin → Trash).");
+      }
       if (user.role === "shop" && (!SHOP_STATUSES.includes(status) || !v.active)) {
         throw new HttpError(403, "The shop can set In service, In the shop or On hold on trucks in the fleet. Ask a supervisor for the rest.");
       }
@@ -170,7 +173,7 @@ export default async function fleetRoutes(app: FastifyInstance) {
     }
     for (const y of await q(
       `SELECT y.id, y.name FROM yards y WHERE y.active
-          AND NOT EXISTS (SELECT 1 FROM yard_inspections w WHERE w.yard_id = y.id AND w.inspection_date = $1::date)`, [today])) {
+          AND NOT EXISTS (SELECT 1 FROM live_yard_inspections w WHERE w.yard_id = y.id AND w.inspection_date = $1::date)`, [today])) {
       items.push({ kind: "yard", state: "due", title: `${y.name}: today's walk isn't done`, detail: "", link: `#/yard/${y.id}`, sort: "0000" });
     }
     items.sort((a, b) => (a.state === b.state ? a.sort.localeCompare(b.sort) : a.state === "due" ? -1 : 1));

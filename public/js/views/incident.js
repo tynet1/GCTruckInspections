@@ -37,7 +37,7 @@ function stateSection(n) {
   return `<h2>Archive or delete</h2><div class="card">
     ${b.length ? `<div class="row">${b.join("")}</div>` : ""}
     ${n.state === "active" ? `<p class="small muted" style="margin:10px 0 0">Archive hides it from the lists and takes its damage off the truck; un-archive brings it back.${
-      isAdmin ? " Delete is for reports that should never have existed; it can be restored from Admin → Deleted." : ""}</p>` : ""}
+      isAdmin ? " Delete is for reports that should never have existed; it goes in Admin → Trash, where it can be restored." : ""}</p>` : ""}
     ${hist.length ? `<ul class="statehist">${hist.map((x) => `<li>${ACTION_PAST[x.action] || esc(x.action)} ${fmtDate(x.changed_at)} by ${esc(x.changed_by_name)}${
       x.reason ? `: ${esc(x.reason)}` : ""}</li>`).join("")}</ul>` : ""}</div>`;
 }
@@ -50,8 +50,8 @@ function changeState(n, action) {
     archive: { title: "Archive this report?", body: `It's hidden from the lists but kept, and you can un-archive it any time.${what ? ` <b>Its ${what} will come off ${truck}'s page</b> until then.` : ""}`,
       reason: "Why? (optional)", ok: "Archive" },
     unarchive: { title: "Un-archive this report?", body: `It goes back in the lists${what ? `, and its ${what} come back on ${truck}'s page` : ""}.`, ok: "Un-archive" },
-    delete: { title: "Delete this report?", body: `For reports that should never have existed (wrong truck, a duplicate, a test). Nothing is erased: it moves to
-        Admin → Deleted and can be restored there.${what ? ` <b>Its ${what} will come off ${truck}'s page.</b>` : ""}`,
+    delete: { title: "Delete this report?", body: `For reports that should never have existed (wrong truck, a duplicate, a test). Nothing is erased yet: it goes in
+        Admin → Trash and can be restored there. After 7 days in the trash an admin can delete it forever.${what ? ` <b>Its ${what} will come off ${truck}'s page.</b>` : ""}`,
       reason: "Why is it being deleted?", required: true, ok: "Delete", danger: true },
     restore: { title: "Restore this report?", body: `It goes back in the lists${what ? `, and its ${what} come back on ${truck}'s page` : ""}.`, ok: "Restore" },
   }[action];
@@ -131,7 +131,7 @@ export async function render(app, id) {
       It's hidden from the lists, and its damage is off ${esc(n.truck_code)}'s page. It still exports to PDF.</div>`;
   } else if (n.state === "deleted") {
     h += `<div class="banner err"><b>Deleted</b> ${fmtDate(si?.changed_at)}${si?.changed_by_name ? ` by ${esc(si.changed_by_name)}` : ""}${si?.reason ? `: ${esc(si.reason)}` : ""}.
-      Nothing was erased: it's listed under Admin → Deleted and can be restored there.</div>`;
+      It's in Admin → Trash: it can be restored there, or deleted forever ${fmtDate(new Date(new Date(si?.changed_at).getTime() + 7 * 864e5).toISOString())} or later.</div>`;
   }
   const where = [n.location_name, n.street, [n.city, n.address_state].filter(Boolean).join(", ")].filter(Boolean).join(" · ");
   h += `<div class="card" style="margin-top:14px">${kv([

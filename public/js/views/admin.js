@@ -1,11 +1,12 @@
-// Admin: users & PINs, trucks (with trailer type and diagrams), the inspection checklist, branding, and deleted
-// inspections (to restore).
+// Admin: users & PINs, trucks (with trailer type and diagrams), the inspection checklist, branding, and the trash
+// (restore, delete forever, move old records in).
 import { api } from "../api.js";
 import { brandVars, rememberBranding } from "../brand.js";
 import { errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, modal, shrinkImage, toast, vehicleInfo } from "../util.js";
+import { askTrash, TRASH_DAYS } from "./common.js";
 
-const TABS = { users: "Users & PINs", trucks: "Trucks", equipment: "Equipment", checklist: "Checklist", branding: "Branding", deleted: "Deleted inspections and reports" };
+const TABS = { users: "Users & PINs", trucks: "Trucks", equipment: "Equipment", checklist: "Checklist", branding: "Branding", trash: "Trash" };
 const ROLE_LABELS = {
   crew: "crew (inspections)",
   shop: "shop (maintenance log)",
@@ -15,17 +16,18 @@ const ROLE_LABELS = {
 
 export async function render(app, tab = "users", editId = null) {
   const nav = state.nav;
+  if (tab === "deleted") tab = "trash"; // the tab's old name, in links and bookmarks
   if (!TABS[tab]) tab = "users";
   setHeader({ title: "Admin", sub: TABS[tab], back: "#/" });
   app.innerHTML = `<div class="tabs">${Object.entries(TABS).map(([k, label]) =>
-    `<a href="#/admin/${k}" class="${tab === k ? "on" : ""}">${esc(k === "users" ? "Users" : k === "deleted" ? "Deleted" : label)}</a>`).join("")}</div>
+    `<a href="#/admin/${k}" class="${tab === k ? "on" : ""}">${esc(k === "users" ? "Users" : label)}</a>`).join("")}</div>
     <div id="adm"><div class="empty">Loading…</div></div>`;
   try {
     if (tab === "trucks") await trucksTab(nav, editId);
     else if (tab === "equipment") await equipmentTab(nav, editId);
     else if (tab === "checklist") await checklistTab(nav);
     else if (tab === "branding") await brandingTab(nav);
-    else if (tab === "deleted") await deletedTab(nav);
+    else if (tab === "trash") await trashTab(nav);
     else await usersTab(nav);
   } catch (e) {
     if (!stale(nav)) $("#adm").innerHTML = errorHtml(e);
@@ -283,50 +285,243 @@ function equipmentEditor(e, data, onSaved) {
   };
 }
 
-// ---------- Deleted inspections ----------
+// ---------- Trash ----------
 
-/** Deleted inspections and incident reports are never erased; this is where they're found and restored. */
-async function deletedTab(nav) {
-  const [list, incidents] = await Promise.all([api("/admin/deleted-inspections"), api("/admin/deleted-incidents").catch(() => [])]);
+let trashKind = "all";
+const KIND_PLURAL = {
+  inspection: "Inspections", incident: "Incident reports", yard_walk: "Yard walks", equipment_check: "Equipment checks",
+  service_log: "Maintenance", equipment_service: "Equipment maintenance", repair_ticket: "Tickets", vehicle: "Trucks", user: "Users",
+};
+const ONE = {
+  photos: "photo", "damage marks": "damage mark", "checklist answers": "checklist answer", signatures: "signature", notes: "note",
+  sketches: "sketch", "damage repairs": "damage repair", "repairs listed": "repair listed", "earlier versions": "earlier version",
+  "problems listed": "problem listed", "pieces checked": "piece checked", "registration updates": "registration update",
+  "status changes": "status change",
+};
+const counted = (removed) => Object.entries(removed || {}).map(([k, n]) => `${n} ${n === 1 ? ONE[k] || k : k}`);
+
+/**
+ * Everything deleted waits here: restore it, or once it has been here TRASH_DAYS days, delete it forever. Also moves
+ * old records in by date, and lists what has been deleted forever.
+ */
+async function trashTab(nav) {
+  const [data, log] = await Promise.all([api("/admin/trash"), api("/admin/purge-log").catch(() => [])]);
   if (stale(nav)) return;
-  $("#adm").innerHTML = `${incidents.length ? `<h2>Deleted incident reports (${incidents.length})</h2>
-    <div class="card list">${incidents.map((n) => `<div class="item" style="align-items:flex-start">
-      <span class="grow"><a href="#/incident/${esc(n.id)}" style="display:inline-flex;align-items:center;min-height:44px"><b>${esc(n.truck_code)}</b>&nbsp;· ${fmtDate(n.incident_date)}</a>
-        <span class="small muted" style="display:block">Filed by ${esc(n.reporter_name || "")} · deleted ${fmtDate(n.deleted_at)} by ${esc(n.deleted_by_name)}</span>
-        <span class="small" style="display:block">${esc(n.reason || "")}</span></span>
-      <button class="secondary" data-restore-inc="${esc(n.id)}">Restore</button></div>`).join("")}</div>` : ""}
-    <h2>Deleted inspections (${list.length})</h2>
-    <div class="card list">${list.length ? list.map((i) => `<div class="item" style="align-items:flex-start">
-      <span class="grow"><a href="#/inspection/${esc(i.id)}" style="display:inline-flex;align-items:center;min-height:44px"><b>${esc(i.truck_code)}</b>&nbsp;· ${fmtDate(i.inspection_date)}</a>
-        <span class="small muted" style="display:block">${esc(i.inspector_name || "")} · deleted ${fmtDate(i.deleted_at)} by ${esc(i.deleted_by_name)}</span>
-        <span class="small" style="display:block">${esc(i.reason || "")}</span></span>
-      <button class="secondary" data-restore="${esc(i.id)}">Restore</button></div>`).join("")
-      : `<div class="empty">Nothing deleted.</div>`}</div>
-    <p class="small muted">Deleting an inspection never erases it. Restoring puts it back in the lists, with its repairs and damage back on the truck.</p>`;
-  $("#adm").querySelectorAll("[data-restore-inc]").forEach((b) => (b.onclick = async () => {
-    const n = incidents.find((x) => x.id === b.dataset.restoreInc);
-    if (!(await confirmBox(`Restore the ${n.truck_code} incident report from ${fmtDate(n.incident_date)}? It goes back in the lists, with its damage back on the truck.`, "Restore"))) return;
+  const reload = () => trashTab(nav);
+  const byKind = new Map();
+  for (const it of data.items) byKind.set(it.kind, (byKind.get(it.kind) || 0) + 1);
+  if (trashKind !== "all" && !byKind.has(trashKind)) trashKind = "all";
+  const shown = data.items.filter((it) => trashKind === "all" || it.kind === trashKind);
+  const box = $("#adm");
+  box.innerHTML = `<div class="card" style="margin-top:14px">
+      <p class="small muted" style="margin:0">Deleted records wait here, out of every list. <b>Restore</b> puts one back as it was.
+        After ${TRASH_DAYS} days in the trash an admin can <b>delete it forever</b>: the record, its photos and signatures are
+        erased, and only a line in the log below says it existed. Nightly backups still hold it for up to 30 more days.</p>
+      <div class="row" style="margin-top:12px">
+        <button class="secondary" id="trOld">Move old records to the trash</button>
+        ${data.ready ? `<button class="secondary danger" id="trAll">Delete forever all ready (${data.ready})</button>` : ""}</div></div>
+    ${byKind.size > 1 ? `<div class="chips" id="trKinds">${[["all", `All (${data.items.length})`], ...[...byKind].map(([k, n]) => [k, `${KIND_PLURAL[k] || k} (${n})`])]
+      .map(([k, label]) => `<button type="button" data-kind="${k}" class="${k === trashKind ? "on" : ""}">${esc(label)}</button>`).join("")}</div>` : ""}
+    <h2>In the trash (${data.total})</h2>
+    <div class="card list">${shown.length ? shown.map((it, n) => `<div class="item" style="align-items:flex-start">
+      <span class="grow">${it.link ? `<a href="${esc(it.link)}" style="display:inline-flex;align-items:center;min-height:44px"><b>${esc(it.title)}</b></a>`
+          : `<b style="display:inline-flex;align-items:center;min-height:44px">${esc(it.kind === "user" ? `${it.name} (user)` : it.title)}</b>`}
+        <span class="small muted" style="display:block">${[it.record_date ? fmtDate(it.record_date) : "", it.who, it.about].filter(Boolean).map(esc).join(" · ")}</span>
+        <span class="small muted" style="display:block">Deleted ${fmtDate(it.deleted_at)} by ${esc(it.deleted_by_name)}</span>
+        <span class="small" style="display:block">${esc(it.reason)}</span></span>
+      <span class="btncol"><button class="secondary" data-restore="${n}">Restore</button>
+        ${it.ready ? `<button class="secondary danger" data-purge="${n}">Delete forever</button>`
+          : `<span class="small muted" style="text-align:center;max-width:120px">Delete forever from ${fmtDate(it.ready_at)}</span>`}</span></div>`).join("")
+      : `<div class="empty">The trash is empty.</div>`}</div>
+    ${data.total > data.items.length ? `<p class="small muted">Showing the newest ${data.items.length} of ${data.total}.</p>` : ""}
+    <details class="onfile" style="margin:6px 4px"><summary>Deleted forever (${log.length})</summary>
+      ${log.length ? `<ul class="repairlist small">${log.map((l) => `<li><b>${esc(l.title)}</b>${l.record_date ? ` · ${fmtDate(l.record_date)}` : ""}
+        <div class="muted">Deleted forever ${fmtDate(l.purged_at)} by ${esc(l.purged_by_name)} · in the trash since ${fmtDate(l.deleted_at)}${l.deleted_by_name ? ` (${esc(l.deleted_by_name)})` : ""}</div>
+        <div>${esc(l.reason)}</div>${counted(l.removed).length ? `<div class="muted">Removed: ${esc(counted(l.removed).join(", "))}</div>` : ""}</li>`).join("")}</ul>`
+        : `<p class="small muted">Nothing has been deleted forever.</p>`}</details>`;
+
+  box.querySelectorAll("[data-kind]").forEach((b) => (b.onclick = () => { trashKind = b.dataset.kind; reload(); }));
+  box.querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => {
+    const it = shown[Number(b.dataset.restore)];
+    const back = it.kind === "vehicle" ? " It comes back retired." : it.kind === "user" ? " They come back inactive."
+      : ["service_log", "equipment_service", "repair_ticket"].includes(it.kind) ? " It comes back voided." : "";
+    if (!(await confirmBox(`Restore ${it.kind === "user" ? it.name : it.title}? It goes back in the lists.${back}`, "Restore"))) return;
     b.disabled = true;
     try {
-      await api(`/incidents/${n.id}/restore`, { method: "POST", body: {} });
+      await api("/admin/trash/restore", { method: "POST", body: { kind: it.kind, id: it.id } });
       toast("Restored ✓");
     } catch (e) {
-      toast(e.message, 4000);
+      toast(e.status === 0 ? "No signal, so nothing changed." : e.message, 4000);
     }
-    if (!stale(nav)) deletedTab(nav);
+    if (!stale(nav)) reload();
   }));
-  $("#adm").querySelectorAll("[data-restore]").forEach((b) => (b.onclick = async () => {
-    const i = list.find((x) => x.id === b.dataset.restore);
-    if (!(await confirmBox(`Restore the ${i.truck_code} inspection from ${fmtDate(i.inspection_date)}? It goes back in the lists, with its repairs and damage back on the truck.`, "Restore"))) return;
-    b.disabled = true;
+  box.querySelectorAll("[data-purge]").forEach((b) => (b.onclick = () => purgeOne(shown[Number(b.dataset.purge)], reload)));
+  $("#trOld").onclick = () => oldRecords(reload);
+  const all = $("#trAll");
+  if (all) all.onclick = () => purgeReady(data.ready, reload);
+}
+
+/** Delete one record forever: shows what goes (worked out by the server), then asks for the truck number typed. */
+async function purgeOne(it, onDone) {
+  const m = modal(`<h3>Delete forever?</h3><p><span class="spinner"></span> Working out what goes…</p>`);
+  const sheet = m.querySelector(".sheet");
+  let pv;
+  try {
+    pv = await api("/admin/trash/preview", { method: "POST", body: { kind: it.kind, id: it.id } });
+  } catch (e) {
+    sheet.innerHTML = `<h3>Can't delete it forever</h3><div class="banner err">${esc(e.status === 0 ? "No signal. Try again when you have signal." : e.message)}</div>
+      <div class="row" style="justify-content:flex-end"><button class="secondary" data-c>Close</button></div>`;
+    sheet.querySelector("[data-c]").onclick = () => m.remove();
+    return;
+  }
+  const name = it.kind === "user" ? `${it.name} (user)` : it.title;
+  const gone = counted(pv.removed);
+  sheet.innerHTML = `<h3>Delete ${esc(name)} forever?</h3>
+    <p class="muted" style="margin-top:-6px">This can't be undone from the app.</p>
+    <p style="margin:0 0 6px"><b>Erased for good:</b> the ${esc(it.label.toLowerCase())}${gone.length ? `, ${esc(gone.join(", "))}` : ""}${
+      pv.files ? ` (${pv.files} file${pv.files === 1 ? "" : "s"})` : ""}.</p>
+    ${pv.notes.map((x) => `<p class="small" style="margin:0 0 6px">${esc(x)}</p>`).join("")}
+    <p class="small muted">Kept: a line in the log saying what it was, which truck, why, who and when, but none of what it said.
+      Nightly backups still hold it for up to 30 days.</p>
+    <label class="f" for="pvC">Type <b>${esc(it.confirm)}</b> to confirm</label>
+    <input class="t" id="pvC" autocomplete="off" autocapitalize="characters" spellcheck="false">
+    <div id="pvE"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="secondary" data-c>Cancel</button>
+      <button class="primary btn-danger" data-y disabled>Delete forever</button></div>`;
+  const input = sheet.querySelector("#pvC");
+  const go = sheet.querySelector("[data-y]");
+  input.focus();
+  input.oninput = () => { go.disabled = input.value.trim().toUpperCase() !== it.confirm.toUpperCase(); };
+  sheet.querySelector("[data-c]").onclick = () => m.remove();
+  go.onclick = async () => {
+    go.disabled = true;
     try {
-      await api(`/inspections/${i.id}/restore`, { method: "POST", body: {} });
-      toast("Restored ✓");
+      await api("/admin/trash/purge", { method: "POST", body: { kind: it.kind, id: it.id, confirm: input.value.trim() }, timeout: 60000 });
+      m.remove();
+      toast("Deleted forever");
+      onDone();
     } catch (e) {
-      toast(e.message, 4000);
+      go.disabled = false;
+      sheet.querySelector("#pvE").innerHTML = `<div class="banner err">${esc(e.status === 0 ? "No signal, so nothing was deleted." : e.message)}</div>`;
     }
-    if (!stale(nav)) deletedTab(nav);
-  }));
+  };
+}
+
+/** Delete forever everything that has been in the trash long enough, a batch at a time, after the count is typed. */
+function purgeReady(n, onDone) {
+  const m = modal(`<h3>Delete forever all ${n} ready?</h3>
+    <p class="muted" style="margin-top:-6px">Everything that has been in the trash ${TRASH_DAYS} days or more. Their records, photos
+      and signatures are erased for good; the log keeps a line for each. This can't be undone from the app.</p>
+    <label class="f" for="paC">Type <b>${n}</b> to confirm</label>
+    <input class="t" id="paC" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+    <div id="paE"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="secondary" data-c>Cancel</button>
+      <button class="primary btn-danger" data-y disabled>Delete forever</button></div>`);
+  const sheet = m.querySelector(".sheet");
+  const input = sheet.querySelector("#paC");
+  const go = sheet.querySelector("[data-y]");
+  input.focus();
+  input.oninput = () => { go.disabled = input.value.trim() !== String(n); };
+  sheet.querySelector("[data-c]").onclick = () => m.remove();
+  go.onclick = async () => {
+    go.disabled = true;
+    sheet.querySelector("[data-c]").disabled = true;
+    const err = (msg) => { sheet.querySelector("#paE").innerHTML = `<div class="banner err">${esc(msg)}</div>`; };
+    let done = 0;
+    const failed = [];
+    let first = true;
+    try {
+      for (;;) {
+        go.innerHTML = `<span class="spinner"></span>&nbsp; ${done} of ${n}…`;
+        const r = await api("/admin/trash/purge-ready", {
+          method: "POST", timeout: 90000,
+          body: first ? { confirm: n } : { more: true, skip: failed.map((f) => `${f.kind}:${f.id}`) },
+        });
+        first = false;
+        done += r.purged;
+        failed.push(...r.failed);
+        if (!r.remaining || (!r.purged && !r.failed.length)) break;
+      }
+    } catch (e) {
+      err(e.status === 0 ? `Signal lost after ${done} were deleted. Open the trash again to see what's left.` : e.message);
+      sheet.querySelector("[data-c]").disabled = false;
+      sheet.querySelector("[data-c]").textContent = "Close";
+      sheet.querySelector("[data-c]").onclick = () => { m.remove(); onDone(); };
+      go.hidden = true;
+      return;
+    }
+    sheet.innerHTML = `<h3>${done} deleted forever</h3>${failed.length ? `<div class="banner err">${failed.length} couldn't be:
+        <ul>${failed.map((f) => `<li>${esc(f.title)}: ${esc(f.error)}</li>`).join("")}</ul></div>` : ""}
+      <div class="row" style="justify-content:flex-end"><button class="primary" data-c>Done</button></div>`;
+    sheet.querySelector("[data-c]").onclick = () => { m.remove(); onDone(); };
+  };
+}
+
+const OLD_KINDS = [["inspection", "Inspections"], ["incident", "Incident reports"], ["yard_walk", "Yard walks"],
+  ["equipment_check", "Equipment checks"], ["service_log", "Maintenance entries"], ["equipment_service", "Equipment maintenance"],
+  ["repair_ticket", "Repair tickets"]];
+
+/** Move every record dated before a day to the trash (they can still be restored). */
+function oldRecords(onDone) {
+  const m = modal(`<h3>Move old records to the trash</h3>
+    <p class="small muted" style="margin-top:-6px">Everything you tick that's dated before the day you pick goes in the trash, where it
+      can still be restored. After ${TRASH_DAYS} days it can be deleted forever from here. Maintenance entries and tickets are voided
+      as they go in, but repairs they fixed stay fixed.</p>
+    <label class="f" for="odDate">Dated before</label><input class="t" id="odDate" type="date">
+    <div id="odKinds" style="margin-top:8px">${OLD_KINDS.map(([k, label]) => `<label class="pick"><input type="checkbox" data-k="${k}" checked>
+      <span class="grow">${esc(label)} <span class="muted" data-n="${k}"></span></span></label>`).join("")}</div>
+    <label class="f" for="odWhy">Why?</label>
+    <textarea class="t" id="odWhy" maxlength="500" placeholder="e.g. Older than we keep records (3 years)"></textarea>
+    <label class="f" for="odC" style="margin-top:12px">Type how many (<b id="odTotal">0</b>) to confirm</label>
+    <input class="t" id="odC" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+    <div id="odE"></div>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button class="secondary" data-c>Cancel</button>
+      <button class="primary btn-danger" data-y disabled>Move to the trash</button></div>`);
+  const $m = (s) => m.querySelector(s);
+  let counts = null;
+  const total = () => counts ? OLD_KINDS.filter(([k]) => $m(`[data-k="${k}"]`).checked).reduce((a, [k]) => a + (counts[k] || 0), 0) : 0;
+  const refresh = () => {
+    $m("#odTotal").textContent = String(total());
+    $m("[data-y]").disabled = !counts || !total() || $m("#odC").value.trim() !== String(total());
+  };
+  $m("#odDate").onchange = async () => {
+    const before = $m("#odDate").value;
+    counts = null;
+    m.querySelectorAll("[data-n]").forEach((s) => (s.textContent = before ? "…" : ""));
+    refresh();
+    if (!before) return;
+    try {
+      const r = await api(`/admin/old-records?before=${encodeURIComponent(before)}&kinds=${OLD_KINDS.map(([k]) => k).join(",")}`);
+      if ($m("#odDate").value !== before) return;
+      counts = r.counts;
+      m.querySelectorAll("[data-n]").forEach((s) => (s.textContent = `(${counts[s.dataset.n] ?? 0})`));
+      $m("#odE").innerHTML = "";
+    } catch (e) {
+      $m("#odE").innerHTML = `<div class="banner err">${esc(e.status === 0 ? "No signal." : e.message)}</div>`;
+    }
+    refresh();
+  };
+  m.querySelectorAll("[data-k]").forEach((c) => (c.onchange = refresh));
+  $m("#odC").oninput = refresh;
+  $m("[data-c]").onclick = () => m.remove();
+  $m("[data-y]").onclick = async (e) => {
+    const reason = $m("#odWhy").value.trim();
+    if (!reason) return void ($m("#odE").innerHTML = `<div class="banner err">Say why they're being deleted.</div>`);
+    e.target.disabled = true;
+    try {
+      const r = await api("/admin/old-records/trash", {
+        method: "POST", timeout: 120000,
+        body: { before: $m("#odDate").value, kinds: OLD_KINDS.map(([k]) => k).filter((k) => $m(`[data-k="${k}"]`).checked),
+          reason, confirm: Number($m("#odC").value.trim()) },
+      });
+      m.remove();
+      toast(`${r.total} moved to the trash ✓`);
+      onDone();
+    } catch (ex) {
+      e.target.disabled = false;
+      $m("#odE").innerHTML = `<div class="banner err">${esc(ex.status === 0 ? "No signal, so nothing changed." : ex.message)}</div>`;
+    }
+  };
 }
 
 // ---------- Users ----------
@@ -369,11 +564,18 @@ function userEditor(u, onSaved) {
     ${isNew ? "" : `<div class="toggle" style="margin:14px 0"><div><b>Active</b><div class="small muted">Inactive users can't sign in</div></div>
       <button type="button" class="sw ${u.active ? "on" : ""}" id="uActive" role="switch" aria-label="Active"></button></div>`}
     ${u.locked ? `<div class="banner info">Locked after too many wrong tries. Set a new PIN or password to unlock now.</div>` : ""}
+    ${!isNew && !u.active && u.id !== state.user?.id ? `<div class="small muted" style="margin-top:12px">Someone who never did anything in the app
+      (a test user, one added by mistake) can be deleted. Anyone with records stays inactive, so their history is kept.</div>
+      <button class="secondary danger" id="uDelete" style="margin-top:8px">Delete ${esc(u.name)}</button>` : ""}
     <div id="uErr"></div>
     <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="secondary" id="uCancel">Cancel</button><button class="primary" id="uSave">Save</button></div>`);
   const act = m.querySelector("#uActive");
   if (act) act.onclick = () => act.classList.toggle("on");
   m.querySelector("#uCancel").onclick = () => m.remove();
+  const del = m.querySelector("#uDelete");
+  if (del) del.onclick = async () => {
+    if (await askTrash("user", u.id, "user")) { m.remove(); onSaved(); }
+  };
   m.querySelector("#uSave").onclick = async (e) => {
     const body = {
       name: m.querySelector("#uName").value,
@@ -469,7 +671,10 @@ function truckEditor(v, diagrams, onSaved) {
 
     ${isNew ? "" : `<div class="subhead">Status</div>
       <div class="toggle"><div><b>Active</b><div class="small muted">Retired trucks are hidden from crews; their history is kept</div></div>
-      <button type="button" class="sw ${v.active ? "on" : ""}" id="tActive" role="switch" aria-label="Active"></button></div>`}
+      <button type="button" class="sw ${v.active ? "on" : ""}" id="tActive" role="switch" aria-label="Active"></button></div>
+      ${v.active ? "" : `<div class="small muted" style="margin-top:12px">A retired truck with nothing on file (no inspections, reports,
+        maintenance or tickets), such as one added by mistake, can be deleted. Any other stays retired, with its history.</div>
+        <button class="secondary danger" id="tDelete" style="margin-top:8px">Delete ${esc(v.truck_code)}</button>`}`}
     <div id="tErr"></div>
     <div class="row" style="justify-content:flex-end;margin-top:16px"><button class="secondary" id="tCancel">Cancel</button><button class="primary" id="tSave">Save</button></div>`);
   const $m = (s) => m.querySelector(s);
@@ -488,6 +693,14 @@ function truckEditor(v, diagrams, onSaved) {
   const act = $m("#tActive");
   if (act) act.onclick = () => act.classList.toggle("on");
   $m("#tCancel").onclick = () => m.remove();
+  const del = $m("#tDelete");
+  if (del) del.onclick = async () => {
+    if (await askTrash("vehicle", v.id, "truck")) {
+      m.remove();
+      if (location.hash.includes("?edit=")) history.replaceState(null, "", "#/admin/trucks");
+      onSaved();
+    }
+  };
 
   for (const [kind, sel] of [["trailer", "#tTrl"], ["truck", "#tDia"]]) {
     $m(`#${kind}UpGo`).onclick = async (e) => {

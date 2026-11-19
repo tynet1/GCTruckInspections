@@ -116,14 +116,41 @@ A trailer type is a named trailer diagram. Every inspection records which truck 
 
 Losing an inspection, photo or log entry is the worst failure this app can have. Every change is judged against that first.
 
-- Nothing is hard-deleted from the app: trucks, users, diagrams and checklist items are retired, not removed.
+- Nothing is erased by accident or in a hurry. Since 2026-11-19 (020) an admin can erase a record on purpose, through
+  one guarded path (the trash, below); everything else is as before: trucks, users, diagrams and checklist items are
+  retired, not removed, and every guard in the database still refuses deletes and changes.
+- **The trash and Delete forever (020; Tyler 2026-11-19: "We might need a way to delete things").** What Tyler wants gone:
+  test records before rollout, mistakes, personal information on request, and records past an age. Admins only.
+  - **Delete puts a record in the trash** (Admin → Trash), never erases it: inspections, incident reports, yard walks,
+    equipment checks, maintenance entries (truck and equipment), repair tickets, and retired trucks and inactive users that
+    have nothing on file. A record in the trash is out of every list and off the truck; Restore puts it back. Maintenance
+    entries and tickets are voided as they go in (as a void always does, a maintenance entry's repairs reopen), and come
+    back voided. A truck or user with any record on file stays retired instead, so their history is never orphaned.
+  - **After 7 days in the trash** (Tyler's choice) an admin can **Delete forever**: the record, everything that is only
+    part of it (checklist answers, damage marks and their repairs, notes, edit history, photos, signature and sketch
+    files) goes. Things that stand on their own stay: a ticket or maintenance entry that listed its repairs just loses
+    those lines, damage a deleted maintenance entry fixed stays repaired (with its photo), and a registration update made
+    at sign-off stays in the truck's history. The screen first shows exactly what will go (worked out by doing it and
+    rolling it back) and asks for the truck number (or the yard, trailer, tag or person's name) to be typed.
+  - **Old records:** Admin → Trash → Move old records to the trash takes every record of the ticked kinds dated before a
+    day (count typed to confirm); maintenance entries and tickets go in voided, but repairs they fixed stay fixed. They can
+    be restored like any other until deleted forever. **Delete forever all ready** does every record past its 7 days.
+  - **The database enforces it:** every guard still refuses deletes and changes, except inside one transaction started by
+    `gc_begin_purge(kind, id)`, which itself refuses a record that isn't in the trash or hasn't been there 7 days. Files
+    are removed only after that transaction commits, and only if nothing in the database still points at them.
+  - **The log:** each permanent delete is a line in `purge_log` (Admin → Trash → Deleted forever): what kind of record,
+    which truck, its date, why, who put it in the trash and who deleted it forever, and how many rows and files went.
+    Never the record's contents; a user is logged as "User #12 (crew)", without the name. The log can't be changed or
+    erased.
+  - Nightly backups keep 30 days, so a record deleted forever is still in the backups for up to 30 days, then gone.
 - Submitted records are read-only in the database (triggers), and corrections go in notes.
 - The phone keeps a draft until the server confirms it; submits are idempotent; uploads retry.
 - Files are written to a temp file, flushed to disk and renamed, so a crash never leaves a half-written photo.
 - Schema changes only add numbered migrations, each in one transaction.
 - Damage repairs (006) can't be edited or deleted, only ended (undo / voided entry) with who, when and why.
 - The database refuses to delete inspections, their checklist answers and damage marks, and any photo once it's attached
-  (005). "Delete" in the app only marks an inspection deleted; it stays restorable for good, with every change kept as history.
+  (005). "Delete" in the app only marks an inspection deleted (in the trash), restorable, with every change kept as history;
+  only Delete forever (020) erases it.
 - Nightly backups (database + uploads) into `backups/` on the server (the same disk as the data for now, Tyler's call
   2026-11-17; copy them off the server for a true second location), and a restore is tested (done 2026-11-11 on Tyler's PC: restored
   data matched the backup row for row and file for file). A backup is written to a temp file and renamed only when complete,
@@ -156,7 +183,7 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
 - Incident reports (018) follow the inspection rules: idempotent submit on `client_id`, read-only once filed (the
   database refuses changes and deletes to the report, its damage marks, notes and who-has-read-it rows), corrections
   and later facts are notes added with who and when, and archive/delete only changes a state row with history (delete
-  is admin-only with a reason; restore from Admin → Deleted). Their photos are attached like any other record's
+  is admin-only with a reason; restore from Admin → Trash). Their photos are attached like any other record's
   (PHOTO_OWNERS) and the week-old clean-up never touches them. The burn-in files incident reports too.
 
 ## 5. Business rules
@@ -218,7 +245,15 @@ POST /inspections         {client_id, ..., items[], damage[], photo_ids[]}
 GET  /inspections?limit&status&vehicle_id&from&to&archived   (from/to: inclusive dates; archived=only|include, else live only)
 POST /inspections/:id/archive {reason?} · /unarchive          supervisor+
 POST /inspections/:id/delete {reason} · /restore             admin
-GET  /admin/deleted-inspections                               admin
+GET  /admin/deleted-inspections                               admin (older app copies; Admin → Trash uses the routes below)
+GET  /admin/trash                                             admin: everything in the trash, with ready / ready_at / confirm
+POST /admin/trash {kind, id, reason} · /admin/trash/restore {kind, id}       admin (kind: inspection, incident, yard_walk,
+                                 equipment_check, service_log, equipment_service, repair_ticket, vehicle, user)
+POST /admin/trash/preview {kind, id}                          admin: what Delete forever would remove (done, then rolled back)
+POST /admin/trash/purge {kind, id, confirm}                   admin: Delete forever (7+ days in the trash; idempotent)
+POST /admin/trash/purge-ready {confirm} · {more, skip[]}      admin: everything ready, a batch per call
+GET  /admin/old-records?before&kinds · POST /admin/old-records/trash {before, kinds[], reason, confirm}   admin
+GET  /admin/purge-log                                         admin
 POST /damage-marks/:id/repair {client_id, note, photo_ids[]}   supervisor+ (photo required; idempotent)
 POST /vehicles/:id/registration {client_id, expires, was, from: form|sign-off|truck, inspection_id?, note?, photo_ids[]?}
                                  supervisor+; 409 if the date changed since `was`; idempotent; history in GET /vehicles/:id
@@ -349,7 +384,8 @@ POST /service-logs/:id/void         {reason}                                    
      - The submitted inspection itself stays read-only (the database triggers don't change): archived/deleted state lives
        in its own record (additive migration), with who, when and why, and every archive/delete/restore is kept as history.
      - **Deleted inspections are never erased (Tyler, 2026-11-11):** they stay recoverable from the Deleted list for good. No
-       purge, no automatic clean-up, and no erase tool.
+       purge, no automatic clean-up, and no erase tool. **Changed 2026-11-19 (Tyler):** the Deleted list is now Admin →
+       Trash, and after 7 days there an admin can delete one forever (§4a, migration 020). Still no automatic clean-up.
      - **Archiving also takes the inspection's open repairs and damage off the truck (Tyler, 2026-11-11)**, the same as
        deleting: they leave the open-repairs lists and "Damage on file" while it's archived, and come back if it's
        un-archived. So nothing drops out of sight by accident, the Archive confirmation names what will come off (e.g.
@@ -507,6 +543,12 @@ POST /service-logs/:id/void         {reason}                                    
    trailers on trucks, supervisor reminders: built; lease details when Tyler has them) → incident reports (built
    2026-11-18).
    Phase 3 (code review, performance, burn-in, data-loss review): done 2026-11-18, see docs/PHASE3-REVIEW.md.
+7. **Delete for real, and dark mode (Tyler, 2026-11-19; built the same day, migration 020).** "We need to revisit my never
+   delete anything core value. We might need a way to delete things." Tyler's answers: delete **all of these** (test data,
+   mistakes, personal info on request, records by age), a **7-day** wait in the trash before Delete forever, **admins
+   only**. Built as the trash in §4a. Also "needs a dark mode": the app follows the phone's light or dark setting, and
+   Menu → Appearance picks Auto, Light or Dark (kept on the phone). Photos, diagrams, signatures and the sketch stay on
+   white, like paper; PDFs don't change.
 
 ## 10. Acceptance checklist for MVP
 

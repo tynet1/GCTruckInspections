@@ -11,6 +11,7 @@ import { decodePngDataUrl, discardUnlessUsed, files, newKey } from "../storage.t
 import { yardPdfHtml } from "../yard-pdf.ts";
 import { YARD_SECTIONS } from "./checklist.ts";
 import { attachFailed, UNATTACHED } from "../photo-owners.ts";
+import { trashInfo } from "./trash.ts";
 
 interface ItemIn { checklist_item_id: number; result: "ok" | "repair"; note: string | null }
 interface PhotoIn { id: string; caption: string | null; checklist_item_id: number | null }
@@ -203,9 +204,9 @@ export default async function yardRoutes(app: FastifyInstance) {
   app.get("/yards", readers, async () =>
     q(
       `SELECT y.id, y.code, y.name,
-              (SELECT max(inspection_date) FROM yard_inspections w WHERE w.yard_id = y.id) AS last_date,
-              EXISTS (SELECT 1 FROM yard_inspections w WHERE w.yard_id = y.id AND w.inspection_date = $1::date) AS walked_today,
-              (SELECT count(*) FROM yard_inspection_items yi JOIN yard_inspections w ON w.id = yi.yard_inspection_id
+              (SELECT max(inspection_date) FROM live_yard_inspections w WHERE w.yard_id = y.id) AS last_date,
+              EXISTS (SELECT 1 FROM live_yard_inspections w WHERE w.yard_id = y.id AND w.inspection_date = $1::date) AS walked_today,
+              (SELECT count(*) FROM yard_inspection_items yi JOIN live_yard_inspections w ON w.id = yi.yard_inspection_id
                 WHERE w.yard_id = y.id AND yi.result = 'repair' AND yi.resolved_at IS NULL)::int AS open_findings
          FROM yards y WHERE y.active ORDER BY y.code`,
       [today()],
@@ -235,9 +236,10 @@ export default async function yardRoutes(app: FastifyInstance) {
               count(yi.*)::int AS items,
               count(yi.*) FILTER (WHERE yi.result = 'repair')::int AS failed,
               count(yi.*) FILTER (WHERE yi.result = 'repair' AND yi.resolved_at IS NULL)::int AS open
-         FROM yard_inspections w LEFT JOIN yard_inspection_items yi ON yi.yard_inspection_id = w.id
+         FROM live_yard_inspections w LEFT JOIN yard_inspection_items yi ON yi.yard_inspection_id = w.id
         WHERE w.yard_id = $1
-        GROUP BY w.id ORDER BY w.inspection_date DESC, w.created_at DESC LIMIT $2`,
+        GROUP BY w.id, w.inspection_date, w.inspector_name, w.created_at
+        ORDER BY w.inspection_date DESC, w.created_at DESC LIMIT $2`,
       [idParam(req.params), limit],
     );
   });
@@ -246,7 +248,7 @@ export default async function yardRoutes(app: FastifyInstance) {
     const d = await loadYardInspection(uuidParam(req.params));
     if (!d) throw notFound("Yard walk not found.");
     const { signature_path: _s, ...walk } = d.walk;
-    return { walk, items: d.items, photos: d.photos.map(({ file_path: _f, ...p }) => p) };
+    return { walk, items: d.items, photos: d.photos.map(({ file_path: _f, ...p }) => p), trash: await trashInfo("yard_walk", walk.id) };
   });
 
   app.get("/yard-inspections/:id/signature", async (req, reply) => {
@@ -273,7 +275,7 @@ export default async function yardRoutes(app: FastifyInstance) {
               (current_date - w.inspection_date) AS days_open,
               ARRAY(SELECT p.id FROM photos p WHERE p.yard_inspection_item_id = yi.id ORDER BY p.created_at, p.id) AS photo_ids
          FROM yard_inspection_items yi
-         JOIN yard_inspections w ON w.id = yi.yard_inspection_id
+         JOIN live_yard_inspections w ON w.id = yi.yard_inspection_id
          JOIN yards y ON y.id = w.yard_id
         WHERE yi.result = 'repair' AND yi.resolved_at IS NULL AND y.active
         ORDER BY y.code, w.inspection_date, w.created_at, yi.id
@@ -284,10 +286,11 @@ export default async function yardRoutes(app: FastifyInstance) {
     const note = reqStr(obj(req.body ?? {}).note, "Resolution note", 1000);
     const r = await one(
       `UPDATE yard_inspection_items SET resolved_at = now(), resolved_by = $2, resolution_note = $3
-        WHERE id = $1 AND result = 'repair' AND resolved_at IS NULL RETURNING id`,
+        WHERE id = $1 AND result = 'repair' AND resolved_at IS NULL
+          AND yard_inspection_id IN (SELECT id FROM live_yard_inspections) RETURNING id`,
       [idParam(req.params), req.user!.id, note],
     );
-    if (!r) throw conflict("That finding is already resolved or isn't a finding.");
+    if (!r) throw conflict("That finding is already resolved, isn't a finding, or its walk is in the trash.");
     return { ok: true };
   });
 }

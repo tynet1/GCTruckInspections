@@ -209,6 +209,7 @@ export default async function exportRoutes(app: FastifyInstance) {
     const params: unknown[] = [];
     const where = scope(f, "s.service_date", params);
     if (!f.more) where.push("s.voided_at IS NULL");
+    where.push("NOT EXISTS (SELECT 1 FROM trash tr WHERE tr.kind = 'service_log' AND tr.record_id = s.id::text)");
     params.push(MAX_ROWS);
     const rows = await q(
       `SELECT s.id, s.service_date, v.truck_code, ${VEHICLE} AS vehicle, s.mileage, s.work, s.category,
@@ -281,7 +282,7 @@ export default async function exportRoutes(app: FastifyInstance) {
          LEFT JOIN LATERAL (
            SELECT service_date FROM service_logs
             WHERE vehicle_id = v.id AND voided_at IS NULL ORDER BY service_date DESC, id DESC LIMIT 1) ls ON true
-        ${f.more ? "" : "WHERE v.active"}
+        ${f.more ? "WHERE NOT EXISTS (SELECT 1 FROM trash tr WHERE tr.kind = 'vehicle' AND tr.record_id = v.id::text)" : "WHERE v.active"}
         ORDER BY v.truck_code`,
     );
     const link = linkBase(req);

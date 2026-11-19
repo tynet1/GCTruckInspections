@@ -3,11 +3,13 @@
 // equipment checks. Entries are never edited or deleted: a mistaken one is voided with a reason, which reopens the
 // problems it closed. Saves are idempotent on client_id, like every other form.
 import type { FastifyInstance } from "fastify";
+import type { PoolClient } from "pg";
 import { requireRole } from "../auth.ts";
 import { one, q, tx } from "../db.ts";
 import { bad, conflict, HttpError, idParam, int, isValidDate, notFound, obj, reqStr, str, UUID_RE } from "../http.ts";
 import { attachFailed, UNATTACHED } from "../photo-owners.ts";
 import { money } from "./service.ts";
+import { trashInfo } from "./trash.ts";
 
 export const EQUIPMENT_WORK = [
   { key: "sharpen", title: "Sharpen blade or chain" },
@@ -106,7 +108,8 @@ export async function saveEntry(input: EntryIn, userId: number) {
     return await tx(async (c) => {
       // The problems it fixes must be this piece's (open, or already resolved some other way meanwhile).
       const items = input.fix_item_ids.length ? (await c.query(
-        `SELECT id, resolved_at FROM equipment_check_items WHERE id = ANY($1::int[]) AND equipment_id = $2 AND result = 'repair' FOR UPDATE`,
+        `SELECT id, resolved_at FROM equipment_check_items WHERE id = ANY($1::int[]) AND equipment_id = $2 AND result = 'repair'
+            AND check_id IN (SELECT id FROM live_equipment_checks) FOR UPDATE`,
         [input.fix_item_ids, input.equipment_id],
       )).rows : [];
       const wrong = input.fix_item_ids.filter((id) => !items.some((i) => i.id === id));
@@ -162,6 +165,27 @@ export async function nextDue(equipmentId: number) {
   }));
 }
 
+/**
+ * Void an entry, inside the caller's transaction; problems it resolved open again (unless another live entry also fixed
+ * them). Returns how many reopened, or null when it was already voided (or doesn't exist).
+ */
+export async function voidEquipmentService(c: PoolClient, id: number, userId: number, reason: string): Promise<number | null> {
+  const r = await c.query(
+    `UPDATE equipment_service_logs SET voided_at = now(), voided_by = $2, void_reason = $3 WHERE id = $1 AND voided_at IS NULL RETURNING id`,
+    [id, userId, reason],
+  );
+  if (!r.rowCount) return null;
+  const reopened = await c.query(
+    `UPDATE equipment_check_items i SET resolved_at = NULL, resolved_by = NULL, resolution_note = NULL
+       FROM equipment_service_repairs r
+      WHERE r.service_log_id = $1 AND r.resolved_here AND i.id = r.check_item_id AND i.resolved_at IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM equipment_service_repairs r2 JOIN equipment_service_logs s2 ON s2.id = r2.service_log_id
+                         WHERE r2.check_item_id = i.id AND r2.service_log_id <> $1 AND s2.voided_at IS NULL)`,
+    [id],
+  );
+  return reopened.rowCount ?? 0;
+}
+
 export default async function equipmentServiceRoutes(app: FastifyInstance) {
   const canRead = { preHandler: requireRole("supervisor", "shop") };
   const canWrite = { preHandler: requireRole("admin", "shop") };
@@ -175,7 +199,8 @@ export default async function equipmentServiceRoutes(app: FastifyInstance) {
     const entries = await q(
       `SELECT s.id, s.service_date, s.work, s.description, s.cost, s.performed_by, s.vendor, (s.voided_at IS NOT NULL) AS voided,
               (SELECT count(*) FROM equipment_service_repairs r WHERE r.service_log_id = s.id)::int AS fixed
-         FROM equipment_service_logs s WHERE s.equipment_id = $1 ORDER BY s.service_date DESC, s.id DESC LIMIT 300`,
+         FROM equipment_service_logs s WHERE s.equipment_id = $1 AND NOT EXISTS (SELECT 1 FROM trash tr WHERE tr.kind = 'equipment_service' AND tr.record_id = s.id::text)
+        ORDER BY s.service_date DESC, s.id DESC LIMIT 300`,
       [id],
     );
     return {
@@ -206,7 +231,7 @@ export default async function equipmentServiceRoutes(app: FastifyInstance) {
     );
     const photos = await q(`SELECT id, caption FROM photos WHERE equipment_service_log_id = $1 ORDER BY created_at, id`, [id]);
     return {
-      ...e, voided: !!e.voided_at,
+      ...e, voided: !!e.voided_at, trash: await trashInfo("equipment_service", id),
       work: (e.work as { type: string; next_due_date: string | null }[]).map((w) => ({ ...w, title: workTitle(w.type) })),
       fixed, photos,
     };
@@ -217,23 +242,12 @@ export default async function equipmentServiceRoutes(app: FastifyInstance) {
     const id = idParam(req.params);
     const reason = reqStr(obj(req.body ?? {}).reason, "Reason", 600);
     return tx(async (c) => {
-      const r = await c.query(
-        `UPDATE equipment_service_logs SET voided_at = now(), voided_by = $2, void_reason = $3 WHERE id = $1 AND voided_at IS NULL RETURNING id`,
-        [id, req.user!.id, reason],
-      );
-      if (!r.rowCount) {
+      const reopened = await voidEquipmentService(c, id, req.user!.id, reason);
+      if (reopened === null) {
         if (!(await c.query(`SELECT 1 FROM equipment_service_logs WHERE id = $1`, [id])).rowCount) throw notFound("Maintenance entry not found.");
         throw conflict("That entry is already voided.");
       }
-      const reopened = await c.query(
-        `UPDATE equipment_check_items i SET resolved_at = NULL, resolved_by = NULL, resolution_note = NULL
-           FROM equipment_service_repairs r
-          WHERE r.service_log_id = $1 AND r.resolved_here AND i.id = r.check_item_id AND i.resolved_at IS NOT NULL
-            AND NOT EXISTS (SELECT 1 FROM equipment_service_repairs r2 JOIN equipment_service_logs s2 ON s2.id = r2.service_log_id
-                             WHERE r2.check_item_id = i.id AND r2.service_log_id <> $1 AND s2.voided_at IS NULL)`,
-        [id],
-      );
-      return { ok: true, reopened: reopened.rowCount };
+      return { ok: true, reopened };
     });
   });
 }

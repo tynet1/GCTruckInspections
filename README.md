@@ -23,7 +23,7 @@ when signal returns.
 | Offline: draft autosaves to the phone (IndexedDB); uploads retry with backoff; "Saved on phone, not yet uploaded"; duplicate-proof submit (`client_id`) | done |
 | Inspection detail: repairs first, pins, photo gallery, full checklist, supervisor sign-off, resolve repairs | done |
 | PDF export matching the paper form (page 1 sheet, page 2 trailer + signatures, photo pages) | done |
-| Admin: users and PINs, trucks (every header field, trailer type, diagram), trailers and equipment, truck/yard/equipment checklists, branding (name, color, logo), deleted inspections | done |
+| Admin: users and PINs, trucks (every header field, trailer type, diagram), trailers and equipment, truck/yard/equipment checklists, branding (name, color, logo), and the trash | done |
 | Docker Compose: Postgres 16, app, Caddy, nightly backups, optional Cloudflare Tunnel | running on the droplet; backup and restore tested |
 
 ## Phase 2
@@ -33,7 +33,7 @@ when signal returns.
 | Maintenance log for the shop manager (`shop` role): log work per truck with mileage, parts, cost, photos; close inspection repairs; next-due mileage/date; edit history; void instead of delete; works offline | done |
 | Maintenance log: several types of work on one entry (multi-select, next-due per type) | done |
 | Mark damage repaired (photo of the fix required; Log fix or supervisor; drops off the form's grey dots, kept on the truck page) | done |
-| Archive or delete inspections (delete = recoverable forever, admin only, reason required); database refuses to erase inspections | done |
+| Archive or delete inspections (delete puts it in the trash, admin only, reason required); database refuses to erase inspections | done |
 | Batch PDF export: tick inspections, get one PDF each (zip, or share as separate files) | done |
 | Repairs board: every open repair across the fleet, by truck or oldest first, with Log fix / Resolve / Ticket | done |
 | CSV export: inspections, repairs, maintenance log, trucks, with truck/date filters (Download CSV in the menu) | done |
@@ -50,6 +50,8 @@ when signal returns.
 | Equipment checks: trailers and tagged equipment kept in Admin (moves between trailers and retirements kept); the shop or a supervisor checks a trailer at a time, each piece on its type's checklist or "Not here"; due every 30 days (changeable); works offline; problems on the equipment page, repairs board and home screen until resolved | done |
 | Maintenance log for equipment: the shop logs work on a piece (types of work, next due per type, cost, photos), closes its open problems ("Log fix"), void with a reason; "Service due" once a date passes; works offline | done |
 | Incident reports (2026-11-18): a supervisor files one from the truck page, in the order of GC's Vehicle Accident Report (when, where with an optional GPS location, driver, police, injuries, damage pinned on the truck, other parties, witnesses, what happened, a finger drawing of the scene and a map screenshot, photos, manager comments, driver and manager signatures); works offline. The PDF is GC's forms filled in: Managers Incident Report, Vehicle Accident Report, damage diagram and Photograph Log, plus the Employee Injury/Near Miss Report and Refusal of Medical Treatment to finish by hand when our employee was hurt. Damage goes on the truck's damage on file and its open repairs (repairs board, repairs CSV) until it's marked repaired or fixed through the maintenance log. Supervisors and admins see new reports on their home screen until they open them; only they can see reports and the other party's photos. Read-only once filed: corrections are notes; archive/delete like inspections | done |
+| Trash and Delete forever (2026-11-19, admins): Delete puts an inspection, incident report, yard walk, equipment check, maintenance entry, repair ticket, or a retired truck or inactive user with nothing on file, in Admin → Trash, out of every list, where it can be restored. After 7 days there an admin can delete it forever (record, photos, signatures), after seeing what goes and typing the truck number; one at a time or everything ready. "Move old records to the trash" clears out everything before a date. Each permanent delete leaves a line in a log that can't be erased (what, which truck, why, who, when; never the contents) | done |
+| Dark mode (2026-11-19): follows the phone's light/dark setting, or pick Auto, Light or Dark in the menu | done |
 
 Build order and every answered question are in SPEC §9.
 
@@ -61,9 +63,12 @@ fixes: [docs/PHASE3-REVIEW.md](docs/PHASE3-REVIEW.md).
 
 ## Security and data safety
 
-- Nothing is hard-deleted: inspections, incident reports, yard walks, equipment checks, trailers, equipment,
-  maintenance entries, damage repairs, registration history, repair tickets and checklist items are kept for good
-  (retire, void or archive instead), and the database refuses deletes. See SPEC §4a.
+- Nothing is erased by accident: the database refuses every delete and change to recorded data, except one admin
+  action, Delete forever, for a record that has been in the trash at least 7 days (the database checks the 7 days
+  itself). Delete in the app only puts a record in the trash, where it can be restored. Trucks, users, trailers,
+  equipment and checklist items are retired instead (a truck or user with nothing on file can go in the trash).
+  Every permanent delete is logged for good. Backups keep 30 days, so a deleted record stays in them that long.
+  See SPEC §4a.
 - Incident reports hold the other party's details, so only supervisors and admins can open them and their photos.
   The driver's home address, birth date, license number and employee ID aren't collected (they print blank).
 - Sign-in: lockout after 5 wrong tries (longer if it keeps happening that day), 20 wrong tries an hour per network,
@@ -79,7 +84,8 @@ src/                 Fastify API (TypeScript, run directly by Node 24, no build 
   routes/            auth, vehicles, photos, inspections, service (maintenance), tickets, export (CSV),
                      checklist (editor), yard (yard walks), equipment (trailers, equipment, checks),
                      equipment-service (equipment maintenance), fleet (status, trailers, reminders),
-                     incidents (incident reports), admin, branding
+                     incidents (incident reports), trash (delete, restore, delete forever, old records),
+                     admin, branding
   photo-owners.ts    the one list of records a photo can belong to (used by every photo check and the clean-up)
   pdf.ts             paper-form HTML template -> PDF via headless Chromium
   ticket-pdf.ts      repair ticket PDF
@@ -88,6 +94,7 @@ src/                 Fastify API (TypeScript, run directly by Node 24, no build 
   csv.ts             CSV files for Excel (formula-safe)
   storage.ts         photo/signature storage (local disk today; S3/Azure later behind the same interface)
 public/              the web app (plain HTML/CSS/JS modules, no framework), service worker, diagrams
+  js/theme.js        light or dark look (runs before the page draws; colors are CSS variables in css/app.css)
   js/views/          one module per screen (home, truck, form, detail, repairs, tickets, yard, csv, export, admin…)
   js/drafts.js, svc.js, yardq.js, equipq.js, esvcq.js, incq.js   what's saved on the phone and the upload queues
                      (inspections, maintenance, yard walks, equipment checks, equipment maintenance, incident reports)

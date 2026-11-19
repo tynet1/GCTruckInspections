@@ -1,7 +1,8 @@
 // One equipment maintenance entry: the work, next due, problems it fixed, photos, and Void (shop, admin).
 import { api } from "../api.js";
-import { can, errorHtml, setHeader, stale, state } from "../ui.js";
+import { atLeast, can, errorHtml, setHeader, stale, state } from "../ui.js";
 import { esc, fmtDate, fmtMoney, lightbox, modal, toast } from "../util.js";
+import { askTrash, trashBanner, trashCard } from "./common.js";
 
 export async function render(app, id) {
   const nav = state.nav;
@@ -16,7 +17,7 @@ export async function render(app, id) {
   }
   if (stale(nav)) return;
   setHeader({ title: e.tag, sub: `Maintenance · ${fmtDate(e.service_date)}`, back: `#/equipment/piece/${e.equipment_id}` });
-  let h = "";
+  let h = trashBanner(e.trash);
   if (e.voided) h += `<div class="banner info" style="margin-top:14px"><b>Voided ${fmtDate(e.voided_at)}</b> by ${esc(e.voided_by_name)}: ${esc(e.void_reason)}</div>`;
   h += `<div class="card" style="margin-top:14px"><dl class="kv">
       <dt>Date</dt><dd>${fmtDate(e.service_date)}</dd>
@@ -36,8 +37,13 @@ export async function render(app, id) {
     h += `<h2>Photos</h2><div class="card"><div class="row">${e.photos.map((p) =>
       `<img class="dmgthumb" src="/api/photos/${esc(p.id)}" data-lb="${esc(p.id)}" data-cap="${esc(p.caption || "")}" alt="Photo">`).join("")}</div></div>`;
   }
-  if (!e.voided && can.logService()) h += `<button class="secondary danger wide" id="void" style="margin-top:14px">Void this entry</button>`;
+  if (!e.voided && !e.trash && can.logService()) h += `<button class="secondary danger wide" id="void" style="margin-top:14px">Void this entry</button>`;
+  const trashNote = e.voided ? "" : "It's voided first, so problems it fixed open again. ";
+  if (!e.trash && atLeast("admin")) h += trashCard("maintenance entry", trashNote);
   app.innerHTML = h;
+  app.querySelector("[data-trash]")?.addEventListener("click", async () => {
+    if (await askTrash("equipment_service", e.id, "maintenance entry", trashNote) && !stale(nav)) location.hash = `#/equipment/piece/${e.equipment_id}`;
+  });
   app.querySelectorAll("[data-lb]").forEach((img) => (img.onclick = () => lightbox(img.src, img.dataset.cap)));
   const v = app.querySelector("#void");
   if (v) v.onclick = () => {
