@@ -89,6 +89,15 @@ at a second disk or a mounted NAS share; a backup on the same disk as the VM doe
 Each file is written under a temporary name and renamed when complete, an existing backup is never overwritten, and
 only one backup runs at a time, so a file with a final name is always a whole backup.
 
+Every run, good or failed, is recorded in the database (`backup_runs`), and **Admin → About** shows the last one and
+whether it worked, in red when the last good backup is more than 2 days old. Recording never makes a backup fail; if
+the database is down, the run is only in `docker compose logs backup`.
+
+The app also backs up by itself **before it changes the database during an update** (section 6), into the same
+folder: `db_<stamp>_before-migrate-NNN.dump` and `uploads_<stamp>_before-migrate-NNN.tar.gz`, pruned with the others.
+For that, `BACKUP_DIR` is mounted into the app container too; if the app's user can't write to it, the app container
+makes that user (uid 1000) the folder's owner when it starts. The backup container still writes there as before.
+
 Take one right now and check it:
 
 ```bash
@@ -122,18 +131,42 @@ COMPOSE_PROJECT_NAME=gc-test BACKUP_DIR=./backups-test docker compose down -v   
 ## 6. Updating
 
 Take a labeled backup first, then pull and rebuild. On the droplet the app is in `/opt/gctruckinspections`.
+(Admin → About shows these same steps; keep the two alike, `UPDATE_STEPS` in `src/routes/about.ts`.)
 
 ```bash
 docker compose exec -T backup /bin/sh /backup.sh before-update
 git pull --ff-only
-nohup sh -c 'docker compose up -d --build app > ~/gc-deploy.log 2>&1; echo EXIT=$? >> ~/gc-deploy.log' &
+nohup sh -c 'docker compose up -d --build app > ~/app-update.log 2>&1; echo EXIT=$? >> ~/app-update.log' &
+# When ~/app-update.log ends with EXIT=0, restart the backup job so it runs the new backup.sh:
+docker compose up -d --no-deps --force-recreate backup
 ```
 
 The rebuild takes a few minutes. Running it under `nohup` means a dropped SSH connection can't cancel it halfway;
-`tail ~/gc-deploy.log` shows `EXIT=0` when it's done, and `docker compose ps` shows the app `healthy` about 30
+`tail ~/app-update.log` shows `EXIT=0` when it's done, and `docker compose ps` shows the app `healthy` about 30
 seconds later. Until the new container starts, the old one keeps serving. Database migrations run automatically when
 the app starts (`docker compose logs app | grep migration`). Phones pick up the new version the next time the app is
-opened (the service worker refreshes when the files change).
+opened (the service worker refreshes when the files change). The backup job runs `scripts/backup.sh` from the repo
+folder, but keeps the version it started with until it's recreated, hence the last line (recreating it mid-backup is
+safe: an unfinished backup is never mistaken for a whole one).
+
+**The backup before migrations.** When an update brings database changes, the new app backs up the database and photos
+first, as `db_<stamp>_before-migrate-NNN.dump` + `uploads_<stamp>_before-migrate-NNN.tar.gz` in `BACKUP_DIR` (`docker
+compose logs app | grep -i backup`). With many photos this takes a few minutes before the app answers. **If that backup
+fails, nothing in the database is changed**: the log shows `PRE-MIGRATION BACKUP FAILED` with the reason (usually a full
+disk or a backup folder the app can't write to), the app doesn't serve, and it tries again by itself (after 30 seconds,
+then less and less often, up to every 15 minutes). Fix the cause and it carries on, or `docker compose restart app` to
+try at once. Only in an emergency, to update with no restore point: `PRE_MIGRATE_BACKUP=off` in `.env`, then
+`docker compose up -d app`, and remove that line afterwards.
+
+**Going back.** To undo an update that changed the database: check out the previous version (`git checkout <previous
+commit>`), rebuild (`docker compose up -d --build app`), then restore that update's `before-migrate` pair with
+`scripts/restore.sh` (section 5). Restoring it alone, with the new code still in place, only migrates it again.
+
+**Knowing about updates.** Admin → About shows the running version (`version` in `package.json`). If `UPDATE_CHECK_REPO`
+in `.env` names a GitHub repository (`owner/name`) and an admin turns the check on there, the server asks GitHub for
+that repository's latest release once a day and About says when a newer version is out, with its release notes. The
+request carries nothing about your users or records. The app never installs an update itself, and has no access to
+Docker or the host: that's deliberate (SPEC §9 item 8).
 
 The droplet's firewall (UFW) limits SSH: 6 or more new connections from one address within 30 seconds gets that
 address refused for a while, so don't script rapid back-to-back `ssh` calls.
@@ -188,6 +221,8 @@ How it was set up on Tyler's PC (2026-11-11):
 | Problem | Check |
 |---|---|
 | App container restarting | `docker compose logs app`; usually a wrong `POSTGRES_PASSWORD` after the database was first created with a different one |
+| App stays "starting"/"unhealthy" after an update, `PRE-MIGRATION BACKUP FAILED` in the logs | The backup before the database changes failed, so nothing was changed. The log line says why: free disk space (`df -h`), the backup folder (`BACKUP_DIR`) missing or not writable. Fix it and the app carries on by itself, or `docker compose restart app`. See section 6 |
+| Admin → About says the last good backup is old | `docker compose logs backup`; take one by hand (section 5). If the backup files are new but About isn't, the backup container may still run an old `backup.sh`: `docker compose up -d --no-deps --force-recreate backup` |
 | "No admin account exists" in the logs | Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env`, then `docker compose up -d` |
 | PDF export fails | `docker compose logs app` around the time of the click; Chromium needs ~300 MB RAM free |
 | Phone says "Saved on phone, not yet uploaded" for a long time | Is the tunnel up? `docker compose --profile tunnel ps`; can the phone open the site at all? |

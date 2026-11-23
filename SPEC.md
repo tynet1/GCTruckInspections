@@ -34,7 +34,8 @@ Crew sign-in has to be fast on a phone in a truck: pick your name, enter a 4–6
 - **PDF:** server-side, render an HTML print template with headless Chromium (Playwright) → PDF
 - **Reverse proxy / TLS:** Caddy
 - **Backups:** nightly `pg_dump` plus an uploads tarball into `backups/` on the server, keeping 30 days (copy them off the
-  server for a second location; see docs/PHASE3-REVIEW.md)
+  server for a second location; see docs/PHASE3-REVIEW.md). The app also takes one itself before it migrates the
+  database during an update (§4a), and Admin → About shows the last backup (§9 item 8).
 
 ### Remote access (decide early)
 
@@ -109,6 +110,8 @@ remove the unused UFW rules for 2375/2376; steps in docs/DEPLOY.md "Firewall".
    Saving closes the ticked repairs; the inspection then shows "✓ Repairs fixed" (green) instead of red, and each fixed
    repair links to its entry. Supervisors keep the quick **Resolve** (note only).
 7. **Admin:** trucks (add, edit every header field, retire, pick or upload the body diagram, set the trailer type or "no trailer"), trailer types (name + picture), users and PINs, branding (company name, app name, header color, logo), checklist items (add, reorder, deactivate; never hard-delete).
+   **About & updates** (§9 item 8): the running version, the database's migration level, the last backup and whether it
+   worked, and the optional update check.
 
 A trailer type is a named trailer diagram. Every inspection records which truck and trailer pictures it was drawn on, so changing a truck's diagram or trailer type later never moves old pins.
 
@@ -143,6 +146,24 @@ Losing an inspection, photo or log entry is the worst failure this app can have.
     Never the record's contents; a user is logged as "User #12 (crew)", without the name. The log can't be changed or
     erased.
   - Nightly backups keep 30 days, so a record deleted forever is still in the backups for up to 30 days, then gone.
+- **A backup before every database migration (021, 2026-11-23).** When the app starts on an existing database (one with
+  migrations already applied) and finds migrations to apply, it first takes a labeled backup, `before-migrate-NNN` (NNN =
+  the first pending migration), while holding the migration lock: `db_<stamp>_before-migrate-NNN.dump` and
+  `uploads_<stamp>_before-migrate-NNN.tar.gz` in the backup folder, with the nightly job's names and rules (temp file,
+  flushed, renamed when complete; never overwrites; a failed try leaves no files, not even half a pair, so a retry loop
+  can't fill the disk), so `scripts/restore.sh` restores it like any other. **If the backup fails, no migration is
+  applied**: the app logs it loudly (what's pending, why, how to fix it), doesn't serve, and tries again on its own
+  (30 s, doubling up to 15 minutes) without exiting, so Docker doesn't restart it in a loop. A migration that fails
+  after a good backup is retried the same way, reusing that backup (nothing can write in between), so retries never
+  pile up backups. A new, empty database has nothing to back up. `PRE_MIGRATE_BACKUP=off` skips the backup, for
+  development and test databases only. Each pre-migration backup, good or failed, is recorded in `backup_runs`.
+  **How (Claude's choice, 2026-11-23):** the app image has PostgreSQL's own `pg_dump` 16 (from apt.postgresql.org;
+  Debian bookworm only packages 15, which can't dump a 16 server), and the backup folder (`BACKUP_DIR`) is mounted into
+  the app container at `/backups`. Handing the job to the backup container instead was ruled out: that container only
+  starts once the app is healthy (so the first backup never runs against an empty database), and an update rebuilds only
+  the app, so it may still be running the old `backup.sh`; the app waiting on it could wait forever. The app container
+  starts as root for one step only, making the app's user the owner of the backup folder if it can't write there
+  (Docker creates that host folder owned by root), then runs as `node` (`scripts/app-entrypoint.sh`).
 - Submitted records are read-only in the database (triggers), and corrections go in notes.
 - The phone keeps a draft until the server confirms it; submits are idempotent; uploads retry.
 - Files are written to a temp file, flushed to disk and renamed, so a crash never leaves a half-written photo.
@@ -254,6 +275,9 @@ POST /admin/trash/purge {kind, id, confirm}                   admin: Delete fore
 POST /admin/trash/purge-ready {confirm} · {more, skip[]}      admin: everything ready, a batch per call
 GET  /admin/old-records?before&kinds · POST /admin/old-records/trash {before, kinds[], reason, confirm}   admin
 GET  /admin/purge-log                                         admin
+GET  /admin/about                -> {version, database: {latest, count, pending, unknown}, backups: {last, last_ok, recent,
+                                     folder, last_good_at, stale}, updates (null when UPDATE_CHECK_REPO is blank), update_steps}   admin
+PUT  /admin/update-check {enabled}                            admin (404 when UPDATE_CHECK_REPO is blank)
 POST /damage-marks/:id/repair {client_id, note, photo_ids[]}   supervisor+ (photo required; idempotent)
 POST /vehicles/:id/registration {client_id, expires, was, from: form|sign-off|truck, inspection_id?, note?, photo_ids[]?}
                                  supervisor+; 409 if the date changed since `was`; idempotent; history in GET /vehicles/:id
@@ -549,6 +573,31 @@ POST /service-logs/:id/void         {reason}                                    
    only**. Built as the trash in §4a. Also "needs a dark mode": the app follows the phone's light or dark setting, and
    Menu → Appearance picks Auto, Light or Dark (kept on the phone). Photos, diagrams, signatures and the sketch stay on
    white, like paper; PDFs don't change.
+8. **About & updates, and a backup before migrations (Tyler, 2026-11-23; built the same day, migration 021).** For the
+   public copy of the app (people running their own server want to know when there's a new version), built here so
+   both get it. Tyler agreed to this design:
+   - **No one-click update, on purpose (a security decision).** Installing an update means rebuilding containers, which
+     needs root-level control of Docker on the host (the Docker socket). Giving the app that would let anyone who takes
+     over the app or an admin account take over the whole server. And a failed database migration needs a person
+     looking at it, not a button. So the app never installs anything and has no access to Docker or the host:
+     whoever runs the server installs updates (docs/DEPLOY.md §6), and Admin → About shows the steps.
+   - **Admin → About & updates** (admins only): the running version (`package.json` `version`), the database's migration
+     level (the latest applied migration and how many), and the **last backup**: when it ran, whether it worked, its
+     files and sizes, and the recent runs. The nightly job records every run in `backup_runs` (021) with `psql`
+     (kind, label, times, file names, sizes, a short error; no secrets); recording never makes a backup fail. The
+     backup folder is read too, as a second witness (restoring a backup brings back an older `backup_runs`). A red
+     warning shows when the last good backup is over 2 days old, none is on record, or the last run failed.
+   - **Optional update check, off by default.** Only when `UPDATE_CHECK_REPO` (`owner/name`) is set; blank hides it
+     (this repository is private, so it stays blank here). An admin turns it on in About (kept in `settings`). Then the
+     server sends one plain GET to GitHub's latest-release API for that repository at most once a day (the answer is
+     kept in `settings`, so restarts don't ask again; a failed check also waits a day), with no version, user or record
+     in it, and compares the release's semver tag with the running version. About shows "Version X is available" with
+     the release notes (as plain text), a link to the release page (built from the repository name, never taken from
+     the answer), and the update steps. No network, a rate limit or an odd answer shows "Couldn't check", never an
+     error page.
+   - **Automatic backup before migrations:** §4a.
+   - The public copy also gets versioned releases with a CHANGELOG and prebuilt Docker images; those live in the public
+     repository only, which sets `UPDATE_CHECK_REPO` and bumps `package.json` versions per release.
 
 ## 10. Acceptance checklist for MVP
 

@@ -23,6 +23,9 @@ services:
     # A small init process as PID 1 cleans up the exited helper processes Chromium leaves behind after PDFs
     # (Node as PID 1 doesn't, so they'd pile up over months).
     init: true
+    # Starts as root only so its entrypoint can let the app write to the backup folder, then runs the app as the
+    # unprivileged "node" user (scripts/app-entrypoint.sh).
+    user: root
     depends_on:
       db:
         condition: service_healthy
@@ -39,8 +42,13 @@ services:
       UPLOAD_MIN_FREE_MB: ${UPLOAD_MIN_FREE_MB:-}
       TRUST_PROXY: ${TRUST_PROXY:-}
       TZ: ${TZ:-America/Phoenix}
+      BACKUP_DIR: /backups
+      PRE_MIGRATE_BACKUP: ${PRE_MIGRATE_BACKUP:-}
+      UPDATE_CHECK_REPO: ${UPDATE_CHECK_REPO:-}
     volumes:
       - uploads:/data/uploads
+      # The app's own backup before database migrations goes next to the nightly ones (src/backup.ts).
+      - ${BACKUP_DIR:-./backups}:/backups
 
   caddy:
     image: caddy:2-alpine
@@ -57,7 +65,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
-  # Nightly pg_dump + uploads tarball into BACKUP_DIR, keeping BACKUP_KEEP_DAYS days.
+  # Nightly pg_dump + uploads tarball into BACKUP_DIR, keeping BACKUP_KEEP_DAYS days. Each run is recorded in the
+  # database (backup_runs) for Admin → About. After an update, recreate it so it runs the new backup.sh.
   backup:
     image: postgres:16-alpine
     restart: unless-stopped

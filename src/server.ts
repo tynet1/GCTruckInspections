@@ -11,8 +11,11 @@ import { addressKey, clientAddress, loadSession } from "./auth.ts";
 import { config } from "./config.ts";
 import { pool, q } from "./db.ts";
 import { HttpError } from "./http.ts";
+import { takeBackup } from "./backup.ts";
+import type { BackupResult } from "./backup.ts";
 import { migrate } from "./migrate.ts";
 import { closePdfBrowser } from "./pdf.ts";
+import aboutRoutes from "./routes/about.ts";
 import adminRoutes from "./routes/admin.ts";
 import exportRoutes from "./routes/export.ts";
 import ticketRoutes from "./routes/tickets.ts";
@@ -123,6 +126,7 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
       await api.register(inspectionRoutes);
       await api.register(serviceRoutes);
       await api.register(adminRoutes);
+      await api.register(aboutRoutes);
       await api.register(exportRoutes);
       await api.register(ticketRoutes);
       await api.register(checklistRoutes);
@@ -155,10 +159,33 @@ export async function buildApp(opts: { logger?: boolean } = {}): Promise<Fastify
   return app;
 }
 
+/**
+ * Migrate before serving. If that fails (the backup before it, a migration, or the database isn't reachable yet),
+ * log it loudly and try again later in this same process, without serving: the new code needs the new schema.
+ * Staying up instead of exiting means Docker doesn't restart the app in a loop, and the backup taken by the first
+ * try is reused by the next ones (nothing could write to the database in between), so a migration that keeps
+ * failing can't fill the disk with backups.
+ */
+async function migrateOrWait(app: Awaited<ReturnType<typeof buildApp>>) {
+  const log = (m: string) => app.log.info(m);
+  let kept: BackupResult | null = null;
+  const backupOnce = async (label: string) => (kept?.label === label ? kept : (kept = await takeBackup(label)));
+  for (let wait = 30_000; ; wait = Math.min(wait * 2, 15 * 60_000)) {
+    try {
+      await migrate(log, { backup: config.preMigrateBackup ? backupOnce : null });
+      return;
+    } catch (e) {
+      app.log.fatal(`\n${"=".repeat(78)}\n${(e as Error).message}\n${"=".repeat(78)}`);
+      app.log.error(`The app is not serving until this is fixed. Trying again in ${wait < 60_000 ? `${wait / 1000} seconds` : `${wait / 60_000} minutes`}.`);
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+}
+
 async function main() {
   const app = await buildApp();
   const log = (m: string) => app.log.info(m);
-  await migrate(log);
+  await migrateOrWait(app);
   await ensureAdmin(log);
   await seedVehicles(log);
 

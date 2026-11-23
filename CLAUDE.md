@@ -5,7 +5,9 @@ Read `SPEC.md` first; it is the source of truth. Then:
 - `prototype/index.html` is the approved claude.ai prototype. The production UI in `public/` reuses its look
   (green header, big OK/Repair buttons, tap-to-pin diagram, sticky save bar, finger signature) and behavior.
 - `db/migrations/001_init.sql` is the original handoff schema. Change the schema only by adding numbered
-  migrations (`003_...sql`); never edit one that has shipped. Migrations run automatically on app start.
+  migrations (`003_...sql`); never edit one that has shipped. Migrations run automatically on app start, after a
+  labeled backup when the database already exists (`src/backup.ts`, SPEC §4a); no migration runs if that backup fails.
+  `PRE_MIGRATE_BACKUP=off` skips it, for throwaway databases only.
 - `reference/` holds the original paper forms (layout for the PDF; header data for `seed/vehicles.csv`).
   `seed/DATA-ISSUES.md` lists vehicle data still to confirm.
 
@@ -59,4 +61,7 @@ npm run user -- add --name "X" --role crew --pin 1234
   incident reports: `src/routes/incidents.ts`, `src/incident-pdf.ts`, `public/js/incq.js`, `views/incident*.js`).
   Phase 3 (code review, performance, burn-in, data-loss review) was done 2026-11-18: `docs/PHASE3-REVIEW.md`. Rerun
   `scripts/burnin.ts` after any change to how records, photos or the outboxes are saved.
+- Admin → About & updates (`src/routes/about.ts`, `src/updates.ts`, `views/about.js`; SPEC §9 item 8): version from
+  `package.json`, migration level, last backup (`backup_runs`, written by `scripts/backup.sh`), and an opt-in daily
+  release check (`UPDATE_CHECK_REPO`, blank here). Never give the app Docker-socket or host access to install updates.
 - Ask Tyler before choosing a remote-access method other than Cloudflare Tunnel, or before adding paid services.

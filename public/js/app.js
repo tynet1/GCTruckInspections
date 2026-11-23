@@ -55,7 +55,7 @@ const routes = [
   { re: /^#\/incidents$/, view: incidents, role: "supervisor" },
   { re: /^#\/incident\/new\/(\d+)$/, view: incidentForm, role: "supervisor" },
   { re: /^#\/incident\/([0-9a-f-]{36})$/i, view: incident, role: "supervisor" },
-  { re: /^#\/admin(?:\/(users|trucks|equipment|checklist|branding|trash|deleted))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
+  { re: /^#\/admin(?:\/(users|trucks|equipment|checklist|branding|trash|deleted|about))?(?:\?edit=(\d+))?$/, view: admin, role: "admin" },
 ];
 
 let current = null;
@@ -135,7 +135,7 @@ export function openMenu() {
       ${can.seeService() ? `<a class="secondary" href="#/equipment" data-close>Equipment checks</a>` : ""}
       ${atLeast("supervisor") ? `<a class="secondary" href="#/export" data-close>Export PDFs</a>` : ""}
       ${can.seeService() ? `<a class="secondary" href="#/csv" data-close>Download CSV (spreadsheet)</a>` : ""}
-      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks, equipment, checklists, branding &amp; trash</a>` : ""}
+      ${atLeast("admin") ? `<a class="secondary" href="#/admin/users" data-close>Admin: users, trucks, equipment, checklists, branding, trash &amp; updates</a>` : ""}
       <div><label class="f">Appearance</label><div class="seg" id="mTheme">
         ${[["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]].map(([k, label]) =>
           `<button type="button" data-theme-pick="${k}">${label}</button>`).join("")}</div>

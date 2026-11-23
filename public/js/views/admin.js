@@ -1,12 +1,13 @@
-// Admin: users & PINs, trucks (with trailer type and diagrams), the inspection checklist, branding, and the trash
-// (restore, delete forever, move old records in).
+// Admin: users & PINs, trucks (with trailer type and diagrams), the inspection checklist, branding, the trash
+// (restore, delete forever, move old records in), and About & updates (about.js).
 import { api } from "../api.js";
 import { brandVars, rememberBranding } from "../brand.js";
 import { errorHtml, setHeader, stale, state } from "../ui.js";
 import { $, confirmBox, esc, fmtDate, modal, shrinkImage, toast, vehicleInfo } from "../util.js";
+import { aboutTab } from "./about.js";
 import { askTrash, TRASH_DAYS } from "./common.js";
 
-const TABS = { users: "Users & PINs", trucks: "Trucks", equipment: "Equipment", checklist: "Checklist", branding: "Branding", trash: "Trash" };
+const TABS = { users: "Users & PINs", trucks: "Trucks", equipment: "Equipment", checklist: "Checklist", branding: "Branding", trash: "Trash", about: "About & updates" };
 const ROLE_LABELS = {
   crew: "crew (inspections)",
   shop: "shop (maintenance log)",
@@ -20,7 +21,7 @@ export async function render(app, tab = "users", editId = null) {
   if (!TABS[tab]) tab = "users";
   setHeader({ title: "Admin", sub: TABS[tab], back: "#/" });
   app.innerHTML = `<div class="tabs">${Object.entries(TABS).map(([k, label]) =>
-    `<a href="#/admin/${k}" class="${tab === k ? "on" : ""}">${esc(k === "users" ? "Users" : label)}</a>`).join("")}</div>
+    `<a href="#/admin/${k}" class="${tab === k ? "on" : ""}">${esc(k === "users" ? "Users" : k === "about" ? "About" : label)}</a>`).join("")}</div>
     <div id="adm"><div class="empty">Loading…</div></div>`;
   try {
     if (tab === "trucks") await trucksTab(nav, editId);
@@ -28,6 +29,7 @@ export async function render(app, tab = "users", editId = null) {
     else if (tab === "checklist") await checklistTab(nav);
     else if (tab === "branding") await brandingTab(nav);
     else if (tab === "trash") await trashTab(nav);
+    else if (tab === "about") await aboutTab(nav);
     else await usersTab(nav);
   } catch (e) {
     if (!stale(nav)) $("#adm").innerHTML = errorHtml(e);

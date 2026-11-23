@@ -52,6 +52,8 @@ when signal returns.
 | Incident reports (2026-11-18): a supervisor files one from the truck page, in the order of GC's Vehicle Accident Report (when, where with an optional GPS location, driver, police, injuries, damage pinned on the truck, other parties, witnesses, what happened, a finger drawing of the scene and a map screenshot, photos, manager comments, driver and manager signatures); works offline. The PDF is GC's forms filled in: Managers Incident Report, Vehicle Accident Report, damage diagram and Photograph Log, plus the Employee Injury/Near Miss Report and Refusal of Medical Treatment to finish by hand when our employee was hurt. Damage goes on the truck's damage on file and its open repairs (repairs board, repairs CSV) until it's marked repaired or fixed through the maintenance log. Supervisors and admins see new reports on their home screen until they open them; only they can see reports and the other party's photos. Read-only once filed: corrections are notes; archive/delete like inspections | done |
 | Trash and Delete forever (2026-11-19, admins): Delete puts an inspection, incident report, yard walk, equipment check, maintenance entry, repair ticket, or a retired truck or inactive user with nothing on file, in Admin → Trash, out of every list, where it can be restored. After 7 days there an admin can delete it forever (record, photos, signatures), after seeing what goes and typing the truck number; one at a time or everything ready. "Move old records to the trash" clears out everything before a date. Each permanent delete leaves a line in a log that can't be erased (what, which truck, why, who, when; never the contents) | done |
 | Dark mode (2026-11-19): follows the phone's light/dark setting, or pick Auto, Light or Dark in the menu | done |
+| About & updates (2026-11-23, admins): Admin → About shows the running version, the database's migration level, and the last backup with whether it worked (red when the last good one is over 2 days old). An optional, off-by-default check compares the version with a GitHub repository's latest release once a day (`UPDATE_CHECK_REPO`; blank here, since this repository is private) and shows the release notes and update steps. No one-click update: the app has no access to Docker or the host, by design | done |
+| Backup before database migrations (2026-11-23): when an update brings database changes, the app first backs up the database and photos (`..._before-migrate-NNN`, restorable with `restore.sh`); if that backup fails, nothing is changed and the app says so loudly in its log | done |
 
 Build order and every answered question are in SPEC §9.
 
@@ -76,6 +78,9 @@ fixes: [docs/PHASE3-REVIEW.md](docs/PHASE3-REVIEW.md).
   disk fills. HSTS over HTTPS. Details in SPEC §3.
 - Burn-in tested: phones on a bad connection, app crashes and database restarts lose or duplicate nothing
   (`scripts/burnin.ts`, docs/PHASE3-REVIEW.md).
+- Updates: the app backs itself up before every database migration and applies none if that backup fails. It can't
+  install updates or touch Docker (no Docker socket): a deliberate choice, so taking over the app or an admin account
+  can't take over the server (SPEC §9 item 8).
 
 ## Layout
 
@@ -85,7 +90,10 @@ src/                 Fastify API (TypeScript, run directly by Node 24, no build 
                      checklist (editor), yard (yard walks), equipment (trailers, equipment, checks),
                      equipment-service (equipment maintenance), fleet (status, trailers, reminders),
                      incidents (incident reports), trash (delete, restore, delete forever, old records),
-                     admin, branding
+                     admin, about (Admin → About & updates), branding
+  migrate.ts         applies db/migrations on start, after a backup if the database already exists (backup.ts)
+  backup.ts          the app's own backup before migrations (same files and rules as scripts/backup.sh)
+  updates.ts         the optional, once-a-day check for a newer release (UPDATE_CHECK_REPO)
   photo-owners.ts    the one list of records a photo can belong to (used by every photo check and the clean-up)
   pdf.ts             paper-form HTML template -> PDF via headless Chromium
   ticket-pdf.ts      repair ticket PDF
@@ -100,7 +108,8 @@ public/              the web app (plain HTML/CSS/JS modules, no framework), serv
                      (inspections, maintenance, yard walks, equipment checks, equipment maintenance, incident reports)
 db/migrations/       numbered SQL migrations, applied automatically on start (never edit one that has shipped)
 seed/vehicles.csv    trucks added on start if missing (never overwrites edits made in Admin)
-scripts/             backup.sh (nightly, run by the backup container), restore.sh, burnin.ts (burn-in test)
+scripts/             backup.sh (nightly, run by the backup container; records each run in backup_runs), restore.sh,
+                     app-entrypoint.sh (the app image's entrypoint), burnin.ts (burn-in test)
 test/                API tests against a real Postgres, plus browser-file and CSV checks
 prototype/, reference/   the approved claude.ai prototype and the original paper forms (reference/incidents/: GC's
                      incident report forms, which the incident PDF follows)
@@ -124,7 +133,9 @@ npm install
 npx playwright install chromium        # for PDF export
 ```
 
-Create `.env.local` (gitignored) with at least `DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, then:
+Create `.env.local` (gitignored) with at least `DATABASE_URL`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` (and
+`PRE_MIGRATE_BACKUP=off` unless `pg_dump` 16 is installed: otherwise, when a pull brings a new migration, the app waits
+for a backup it can't take), then:
 
 ```bash
 npm run dev                            # http://localhost:3000, migrations run on start

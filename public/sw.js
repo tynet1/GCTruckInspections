@@ -32,6 +32,7 @@ const SHELL_FILES = [
   "/js/util.js",
   "/js/yardq.js",
   "/js/zip.js",
+  "/js/views/about.js",
   "/js/views/admin.js",
   "/js/views/common.js",
   "/js/views/csv.js",
