@@ -32,7 +32,7 @@ record_run() {
 INSERT INTO backup_runs (kind, ok, started_at, label, db_file, db_bytes, uploads_file, uploads_bytes, error)
 VALUES (:'kind', :'ok'::boolean, to_timestamp(:'started'::bigint), NULLIF(:'label', ''), NULLIF(:'db_file', ''),
         NULLIF(:'db_bytes', '')::bigint, NULLIF(:'up_file', ''), NULLIF(:'up_bytes', '')::bigint,
-        NULLIF(left(:'err', 1000), ''));
+        NULLIF(left(btrim(:'err'), 1000), ''));
 SQL
   then
     echo "$(date '+%F %T') couldn't record this backup run in the database (backup_runs): $(head -n 1 "$recf" 2>/dev/null)." \

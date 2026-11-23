@@ -36,7 +36,8 @@ function backupCard(b) {
       Check the backup job on the server: <code>docker compose logs backup</code>.</div>`;
   }
   if (last && !last.ok) {
-    warn += `<div class="banner err"><b>The last backup failed</b> (${esc(when(last.finished_at))}${last.error ? `: ${esc(last.error)}` : ""}).</div>`;
+    warn += `<div class="banner err"><b>The last backup failed</b>, ${esc(when(last.finished_at))}.${last.error
+      ? `<div class="small" style="margin-top:4px;overflow-wrap:anywhere">${esc(last.error.trim())}</div>` : ""}</div>`;
   }
   const lastOk = b.last_ok;
   const files = (r) => [r.db_file && `${r.db_file} (${bytes(r.db_bytes)})`, r.uploads_file && `${r.uploads_file} (${bytes(r.uploads_bytes)})`]
@@ -56,7 +57,7 @@ function backupCard(b) {
     ${b.recent.length > 1 ? `<details class="onfile"><summary>Recent runs (${b.recent.length})</summary><ul class="repairlist small">${b.recent.map((r) =>
       `<li>${r.ok ? `<span class="pill okk">Worked</span>` : `<span class="pill bad">Failed</span>`} ${esc(when(r.finished_at))}
         <div class="muted">${esc(runLabel(r))}${r.ok ? ` · ${esc(bytes((r.db_bytes || 0) + (r.uploads_bytes || 0)))}` : ""}</div>
-        ${!r.ok && r.error ? `<div>${esc(r.error)}</div>` : ""}</li>`).join("")}</ul></details>` : ""}
+        ${!r.ok && r.error ? `<div style="overflow-wrap:anywhere">${esc(r.error.trim())}</div>` : ""}</li>`).join("")}</ul></details>` : ""}
   </div>`;
 }
 
@@ -75,8 +76,9 @@ function updatesCard(u, steps) {
   if (u.state === "available") {
     const l = u.latest;
     status = `<div class="banner okk"><b>Version ${esc(l.version)} is available.</b> This server runs ${esc(u.current)}.</div>
-      <p style="margin:6px 0">${l.name && l.name !== l.tag ? `<b>${esc(l.name)}</b> · ` : ""}${l.published_at ? `released ${esc(fmtDate(l.published_at))} · ` : ""}
-        <a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">Release page</a></p>
+      <div class="row" style="justify-content:space-between;margin:6px 0">
+        <span>${[l.name && l.name !== l.tag ? `<b>${esc(l.name)}</b>` : "", l.published_at ? `released ${esc(fmtDate(l.published_at))}` : ""].filter(Boolean).join(" · ")}</span>
+        <a class="secondary" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">Release page</a></div>
       ${l.notes ? `<details class="onfile" open><summary>Release notes</summary><div class="relnotes">${esc(l.notes)}</div></details>` : ""}
       <div class="subhead">How to update</div>${stepsHtml(steps)}`;
   } else if (u.state === "current") {

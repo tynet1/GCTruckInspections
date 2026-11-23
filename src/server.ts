@@ -175,8 +175,10 @@ async function migrateOrWait(app: Awaited<ReturnType<typeof buildApp>>) {
       await migrate(log, { backup: config.preMigrateBackup ? backupOnce : null });
       return;
     } catch (e) {
-      app.log.fatal(`\n${"=".repeat(78)}\n${(e as Error).message}\n${"=".repeat(78)}`);
-      app.log.error(`The app is not serving until this is fixed. Trying again in ${wait < 60_000 ? `${wait / 1000} seconds` : `${wait / 60_000} minutes`}.`);
+      const banner = `${"=".repeat(78)}\n${(e as Error).message}\n${"=".repeat(78)}`;
+      app.log.fatal(banner);
+      console.error(banner); // as plain lines too: the JSON log line above folds them into one
+      app.log.error(`The app is not serving until this is fixed. Trying again in ${wait < 60_000 ? `${wait / 1000} seconds` : wait === 60_000 ? "1 minute" : `${wait / 60_000} minutes`}.`);
       await new Promise((r) => setTimeout(r, wait));
     }
   }

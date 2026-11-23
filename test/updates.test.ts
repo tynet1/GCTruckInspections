@@ -314,8 +314,9 @@ if (!url) {
       await assert.rejects(migrate(() => {}, { dir, backup: backupOnce }), /Migration 991_broken\.sql failed/);
       assert.deepEqual(taken, ["before-migrate-990"]);
       assert.equal(await exists("gate_probe_a"), true, "990 went in after its backup");
-      const [r] = await runs("before-migrate-990");
-      assert.equal(r.ok, true);
+      const all990 = await runs("before-migrate-990");
+      assert.deepEqual(all990.map((x) => x.ok), [false, true], "the failed try before, then this good one");
+      const r = all990[1];
       assert.match(r.db_file, /^db_\d{4}-\d{2}-\d{2}_\d{6}_before-migrate-990\.dump$/);
       assert.match(r.uploads_file, /^uploads_\d{4}-\d{2}-\d{2}_\d{6}_before-migrate-990\.tar\.gz$/);
       assert.ok(r.db_bytes > 0 && r.uploads_bytes > 0);
